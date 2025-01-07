@@ -1,7 +1,7 @@
+.gitignore
 LICENSE
 README.md
 pyproject.toml
-setup.cfg
 src/agentu/__init__.py
 src/agentu/agent.py
 src/agentu/search.py
@@ -12,6 +12,7 @@ src/agentu.egg-info/SOURCES.txt
 src/agentu.egg-info/dependency_links.txt
 src/agentu.egg-info/requires.txt
 src/agentu.egg-info/top_level.txt
+tests/__init__.py
 tests/test_agent.py
 tests/test_search.py
 tests/test_tools.py

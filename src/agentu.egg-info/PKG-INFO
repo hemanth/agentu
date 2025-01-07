@@ -5,7 +5,7 @@ Summary: A flexible Python package for creating AI agents with customizable tool
 Author-email: Hemanth HM <hemanth.hm@gmail.com>
 License: MIT License
         
-        Copyright (c) 2024 AgentU Contributors
+        Copyright (c) 2025 Hemanth HM <hemanth.hm@gmail.com>
         
         Permission is hereby granted, free of charge, to any person obtaining a copy
         of this software and associated documentation files (the "Software"), to deal
@@ -25,6 +25,8 @@ License: MIT License
         OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
         SOFTWARE.
         
+Project-URL: Homepage, https://github.com/hemanth/agentu
+Project-URL: Bug Tracker, https://github.com/hemanth/agentu/issues
 Keywords: ai,agents,ollama,tools
 Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Developers
@@ -42,7 +44,7 @@ Requires-Dist: duckduckgo-search>=4.1.1
 
 # AgentU
 
-AgentU is a flexible Python package for creating and managing AI agents with customizable tools using Ollama for evaluation.
+Agentu is a flexible Python package for creating and managing AI agents with customizable tools using Ollama for evaluation.
 
 ## Installation
 
