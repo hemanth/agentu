@@ -1,0 +1,2 @@
+requests>=2.25.1
+duckduckgo-search>=4.1.1
