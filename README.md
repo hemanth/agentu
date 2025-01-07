@@ -113,11 +113,3 @@ __Example output:__
     ]
 }
 ```
-
-## Features
-
-- Easy-to-use API for creating agents with custom tools
-- Integration with Ollama for intelligent tool selection
-- Built-in error handling and logging
-- Type hints and comprehensive documentation
-- Flexible tool system for adding new capabilities
