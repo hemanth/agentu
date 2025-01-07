@@ -1,4 +1,4 @@
-# AgentU
+# agentu
 
 Agentu is a flexible Python package for creating and managing AI agents with customizable tools using Ollama for evaluation.
 
