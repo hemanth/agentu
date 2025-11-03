@@ -14,6 +14,7 @@ def test_search_tool():
     if results and "error" not in results[0]:
         assert all(key in results[0] for key in ["title", "link", "snippet"])
 
+@pytest.mark.skip(reason="Requires Ollama running locally")
 def test_search_agent_search():
     agent = SearchAgent("test_search")
     result = agent.search("python programming", max_results=1)
