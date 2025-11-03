@@ -7,6 +7,7 @@ from .mcp_config import MCPConfigLoader, load_mcp_servers
 from .mcp_transport import MCPServerConfig, AuthConfig, TransportType
 from .mcp_tool import MCPToolAdapter, MCPToolManager
 from .memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
+from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
 
 __version__ = "0.2.0"
 __all__ = [
@@ -25,4 +26,8 @@ __all__ = [
     "MemoryEntry",
     "ShortTermMemory",
     "LongTermMemory",
+    "MemoryStorage",
+    "JSONStorage",
+    "SQLiteStorage",
+    "create_storage",
 ]

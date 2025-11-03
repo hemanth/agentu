@@ -18,7 +18,7 @@ class Agent:
     def __init__(self, name: str, model: str = "llama2", temperature: float = 0.7,
                  mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
                  enable_memory: bool = True, memory_path: Optional[str] = None,
-                 short_term_size: int = 10):
+                 short_term_size: int = 10, use_sqlite: bool = True):
         """Initialize an Agent.
 
         Args:
@@ -30,6 +30,7 @@ class Agent:
             enable_memory: Whether to enable memory system (default: True)
             memory_path: Path for persistent memory storage (default: None)
             short_term_size: Size of short-term memory buffer (default: 10)
+            use_sqlite: If True, use SQLite database for memory; otherwise use JSON (default: True)
         """
         self.name = name
         self.model = model
@@ -43,7 +44,8 @@ class Agent:
         self.memory_enabled = enable_memory
         self.memory = Memory(
             short_term_size=short_term_size,
-            storage_path=memory_path
+            storage_path=memory_path,
+            use_sqlite=use_sqlite
         ) if enable_memory else None
 
         # Load MCP tools if requested
