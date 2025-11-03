@@ -9,7 +9,7 @@ from .mcp_tool import MCPToolAdapter, MCPToolManager
 from .memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
 from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "Agent",
     "Tool",
