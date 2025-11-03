@@ -5,29 +5,104 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import logging
 
+from .tools import Tool
+from .mcp_config import load_mcp_servers
+from .mcp_tool import MCPToolManager
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-@dataclass
-class Tool:
-    name: str
-    description: str
-    function: Callable
-    parameters: Dict[str, Any]
 
 class Agent:
-    def __init__(self, name: str, model: str = "llama2", temperature: float = 0.7):
+    def __init__(self, name: str, model: str = "llama2", temperature: float = 0.7,
+                 mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False):
+        """Initialize an Agent.
+
+        Args:
+            name: Name of the agent
+            model: Ollama model to use (default: llama2)
+            temperature: Temperature for model generation (default: 0.7)
+            mcp_config_path: Optional path to MCP configuration file
+            load_mcp_tools: Whether to automatically load tools from MCP servers (default: False)
+        """
         self.name = name
         self.model = model
         self.temperature = temperature
         self.tools: List[Tool] = []
         self.context = ""
         self.conversation_history = []
+        self.mcp_manager = MCPToolManager()
+
+        # Load MCP tools if requested
+        if load_mcp_tools:
+            self.load_mcp_tools(mcp_config_path)
         
     def add_tool(self, tool: Tool) -> None:
         """Add a tool to the agent's toolkit."""
         self.tools.append(tool)
         logger.info(f"Added tool: {tool.name} to agent {self.name}")
+
+    def load_mcp_tools(self, config_path: Optional[str] = None) -> List[Tool]:
+        """Load tools from MCP servers defined in configuration.
+
+        Args:
+            config_path: Optional path to MCP config file. If None, uses default location.
+
+        Returns:
+            List of loaded Tool objects from MCP servers
+        """
+        try:
+            # Load MCP server configurations
+            server_configs = load_mcp_servers(config_path)
+
+            if not server_configs:
+                logger.warning("No MCP servers found in configuration")
+                return []
+
+            # Add each server to the manager
+            for server_name, server_config in server_configs.items():
+                self.mcp_manager.add_server(server_config)
+
+            # Load all tools from all servers
+            mcp_tools = self.mcp_manager.load_all_tools()
+
+            # Add to agent's tools
+            for tool in mcp_tools:
+                self.tools.append(tool)
+
+            logger.info(f"Loaded {len(mcp_tools)} tools from {len(server_configs)} MCP server(s)")
+            return mcp_tools
+
+        except Exception as e:
+            logger.error(f"Error loading MCP tools: {str(e)}")
+            raise
+
+    def add_mcp_server(self, server_config) -> List[Tool]:
+        """Add a single MCP server and load its tools.
+
+        Args:
+            server_config: MCPServerConfig object
+
+        Returns:
+            List of loaded Tool objects from the MCP server
+        """
+        try:
+            adapter = self.mcp_manager.add_server(server_config)
+            tools = adapter.load_tools()
+
+            for tool in tools:
+                self.tools.append(tool)
+
+            logger.info(f"Added {len(tools)} tools from MCP server: {server_config.name}")
+            return tools
+
+        except Exception as e:
+            logger.error(f"Error adding MCP server {server_config.name}: {str(e)}")
+            raise
+
+    def close_mcp_connections(self):
+        """Close all MCP server connections."""
+        self.mcp_manager.close_all()
         
     def set_context(self, context: str) -> None:
         """Set the context for the agent."""

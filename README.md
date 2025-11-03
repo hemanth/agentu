@@ -74,6 +74,9 @@ print(result)
 - Customizable search parameters (region, SafeSearch, etc.)
 - Easy-to-use API for creating custom agents
 - Type hints and comprehensive documentation
+- **MCP Remote Server Support**: Connect to remote MCP (Model Context Protocol) servers
+- **Flexible Authentication**: Bearer tokens, API keys, and custom headers
+- **Multi-Server Support**: Connect to multiple MCP servers simultaneously
 
 ## Advanced Search Options
 
@@ -112,4 +115,122 @@ __Example output:__
         # Additional results...
     ]
 }
+```
+
+## MCP Remote Server Support
+
+Connect to remote MCP (Model Context Protocol) servers to access additional tools. Supports both **HTTP** and **SSE** transports.
+
+### Simple Example
+
+```python
+from agentu import Agent, MCPServerConfig, AuthConfig, TransportType
+
+# Configure MCP server
+auth = AuthConfig.bearer_token("your_token")
+config = MCPServerConfig(
+    name="my_server",
+    transport_type=TransportType.HTTP,  # or TransportType.SSE
+    url="https://api.example.com/mcp",
+    auth=auth
+)
+
+# Connect and use
+agent = Agent(name="mcp_agent")
+tools = agent.add_mcp_server(config)
+result = agent.execute_tool("server_tool_name", {"param": "value"})
+```
+
+<details>
+<summary><b>Multiple MCP Servers (Programmatic)</b></summary>
+
+```python
+from agentu import Agent, MCPServerConfig, AuthConfig, TransportType
+
+agent = Agent(name="multi_agent")
+
+# HTTP server
+http_config = MCPServerConfig(
+    name="server1",
+    transport_type=TransportType.HTTP,
+    url="https://api.example.com/mcp",
+    auth=AuthConfig.bearer_token("token1")
+)
+agent.add_mcp_server(http_config)
+
+# SSE server (e.g., PayPal MCP)
+sse_config = MCPServerConfig(
+    name="paypal",
+    transport_type=TransportType.SSE,
+    url="https://mcp.paypal.com/sse",
+    auth=AuthConfig.bearer_token("token2")
+)
+agent.add_mcp_server(sse_config)
+
+# Now you have tools from both servers
+print(f"Total tools: {len(agent.tools)}")
+```
+</details>
+
+<details>
+<summary><b>Multiple MCP Servers (Config File)</b></summary>
+
+Create a JSON configuration file (e.g., `mcp_config.json`):
+
+```json
+{
+  "mcp_servers": {
+    "server1": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "auth": {
+        "type": "bearer",
+        "headers": {
+          "Authorization": "Bearer token1"
+        }
+      }
+    },
+    "paypal": {
+      "type": "sse",
+      "url": "https://mcp.paypal.com/sse",
+      "auth": {
+        "type": "bearer",
+        "headers": {
+          "Authorization": "Bearer token2"
+        }
+      },
+      "timeout": 30
+    }
+  }
+}
+```
+
+Load all servers from the config file:
+
+```python
+from agentu import Agent
+
+agent = Agent(name="multi_agent")
+
+# Load all MCP servers from config file
+tools = agent.load_mcp_tools("mcp_config.json")
+
+print(f"Loaded {len(tools)} tools from {len(agent.mcp_tool_manager.adapters)} servers")
+
+# Use any tool from any server
+result = agent.execute_tool("server_tool_name", {"param": "value"})
+```
+</details>
+
+### Auth Options
+
+```python
+# Bearer token
+auth = AuthConfig.bearer_token("your_token")
+
+# API key
+auth = AuthConfig.api_key("key", header_name="X-API-Key")
+
+# Custom headers
+auth = AuthConfig(type="custom", headers={"Auth": "value"})
 ```
