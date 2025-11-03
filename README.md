@@ -10,11 +10,11 @@ pip install agentu
 
 ## Features
 
-- 🧠 **Persistent Memory** - SQLite-backed long-term memory with full-text search
-- 🔌 **MCP Integration** - Connect to Model Context Protocol servers (HTTP & SSE)
-- 🔍 **Built-in Search** - DuckDuckGo web search out of the box
-- 🛠️ **Custom Tools** - Easy-to-define tool system
-- 🔐 **Flexible Auth** - Bearer tokens, API keys, custom headers
+- **Persistent Memory** - SQLite-backed long-term memory with full-text search
+- **MCP Integration** - Connect to Model Context Protocol servers (HTTP & SSE)
+- **Built-in Search** - DuckDuckGo web search out of the box
+- **Custom Tools** - Easy-to-define tool system
+- **Flexible Auth** - Bearer tokens, API keys, custom headers
 
 ## Quick Start
 
