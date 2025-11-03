@@ -74,6 +74,7 @@ print(result)
 - Customizable search parameters (region, SafeSearch, etc.)
 - Easy-to-use API for creating custom agents
 - Type hints and comprehensive documentation
+- **Memory System**: Short-term and long-term memory with persistent storage
 - **MCP Remote Server Support**: Connect to remote MCP (Model Context Protocol) servers
 - **Flexible Authentication**: Bearer tokens, API keys, and custom headers
 - **Multi-Server Support**: Connect to multiple MCP servers simultaneously
@@ -233,4 +234,146 @@ auth = AuthConfig.api_key("key", header_name="X-API-Key")
 
 # Custom headers
 auth = AuthConfig(type="custom", headers={"Auth": "value"})
+```
+
+## Memory System
+
+AgentU includes a powerful memory system that combines short-term (working memory) and long-term (persistent storage) memory capabilities.
+
+### Basic Memory Usage
+
+```python
+from agentu import Agent
+
+# Create agent with memory enabled (default)
+agent = Agent(name="memory_agent", enable_memory=True)
+
+# Store memories
+agent.remember("User prefers Python over JavaScript", memory_type="fact", importance=0.8)
+agent.remember("Project deadline is next Friday", memory_type="task", importance=0.9)
+agent.remember("Meeting notes: Discussed API design", memory_type="observation")
+
+# Recall memories
+recent = agent.recall(limit=5)  # Get recent memories
+facts = agent.recall(memory_type="fact")  # Get all facts
+search = agent.recall(query="deadline")  # Search memories
+
+# Get memory context for prompts
+context = agent.get_memory_context(max_entries=5)
+print(context)
+
+# Get memory statistics
+stats = agent.get_memory_stats()
+print(f"Total memories: {stats['total_memories']}")
+```
+
+### Persistent Memory
+
+```python
+from agentu import Agent
+
+# Create agent with persistent memory storage
+agent = Agent(
+    name="persistent_agent",
+    enable_memory=True,
+    memory_path="agent_memory.json"  # Saves to file
+)
+
+# Memories are automatically saved to file
+agent.remember("Important information", store_long_term=True)
+
+# Manually save memory
+agent.save_memory()
+
+# Memory is automatically loaded on next initialization
+agent2 = Agent(name="agent2", memory_path="agent_memory.json")
+memories = agent2.recall(limit=10)  # Previously stored memories are loaded
+```
+
+### Memory Types and Importance
+
+```python
+from agentu import Agent
+
+agent = Agent(name="smart_agent", enable_memory=True)
+
+# Different memory types
+agent.remember("User said hello", memory_type="conversation", importance=0.4)
+agent.remember("API key format: abc-123-xyz", memory_type="fact", importance=0.9)
+agent.remember("Complete documentation by Monday", memory_type="task", importance=0.8)
+agent.remember("Error rate increased at 3pm", memory_type="observation", importance=0.6)
+
+# High importance memories (>= 0.7) automatically go to long-term storage
+# Consolidate important short-term memories to long-term
+agent.consolidate_memory(importance_threshold=0.6)
+
+# Clear short-term memory while keeping long-term
+agent.clear_short_term_memory()
+```
+
+### Advanced Memory Features
+
+<details>
+<summary><b>Direct Memory System Usage</b></summary>
+
+```python
+from agentu import Memory
+
+# Create standalone memory system
+memory = Memory(
+    short_term_size=10,  # Max short-term entries
+    storage_path="custom_memory.json",
+    auto_consolidate=True
+)
+
+# Store with metadata
+memory.remember(
+    content="Database connection timeout after 30s",
+    memory_type="fact",
+    metadata={
+        "source": "config",
+        "category": "database",
+        "priority": "high"
+    },
+    importance=0.85
+)
+
+# Search with relevance ranking
+results = memory.recall(query="database", limit=5)
+
+# Get all memories of a specific type
+tasks = memory.recall(memory_type="task", limit=10)
+
+# Get formatted context
+context = memory.get_context(max_entries=5)
+
+# Statistics
+stats = memory.stats()
+print(f"Short-term: {stats['short_term_size']}")
+print(f"Long-term: {stats['long_term_size']}")
+print(f"Types: {stats['memory_types']}")
+```
+</details>
+
+### Memory in Conversations
+
+Agents automatically store conversation history in memory:
+
+```python
+from agentu import Agent, Tool
+
+agent = Agent(name="chat_agent", enable_memory=True)
+
+# Add some tools
+# ... tool setup ...
+
+# Process inputs - automatically stored in memory
+agent.process_input("What's the weather?")
+agent.process_input("Book a flight to Tokyo")
+
+# Recall conversation history
+conversations = agent.recall(memory_type="conversation", limit=10)
+
+for memory in conversations:
+    print(f"{memory.content} (importance: {memory.importance})")
 ```
