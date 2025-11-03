@@ -7,6 +7,8 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
 
+from .memory_storage import create_storage, MemoryStorage
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,17 +100,21 @@ class ShortTermMemory:
 class LongTermMemory:
     """Long-term memory with persistent storage and semantic organization."""
 
-    def __init__(self, storage_path: Optional[str] = None):
+    def __init__(self, storage_path: Optional[str] = None, use_sqlite: bool = True):
         """Initialize long-term memory.
 
         Args:
             storage_path: Path to file for persistent storage (optional)
+            use_sqlite: If True, use SQLite database; otherwise use JSON (default: True)
         """
         self.storage_path = storage_path
+        self.use_sqlite = use_sqlite
+        self.storage: Optional[MemoryStorage] = None
         self.entries: List[MemoryEntry] = []
         self.index_by_type: Dict[str, List[MemoryEntry]] = {}
 
         if storage_path:
+            self.storage = create_storage(storage_path, use_sqlite=use_sqlite)
             self.load()
 
     def add(self, content: str, memory_type: str = 'fact',
@@ -224,33 +230,22 @@ class LongTermMemory:
 
     def save(self):
         """Save to persistent storage."""
-        if not self.storage_path:
+        if not self.storage:
             return
 
         try:
-            data = {
-                'entries': [entry.to_dict() for entry in self.entries],
-                'saved_at': datetime.now().isoformat()
-            }
-
-            with open(self.storage_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            logger.debug(f"Saved {len(self.entries)} memories to {self.storage_path}")
+            self.storage.save(self.entries)
         except Exception as e:
             logger.error(f"Error saving long-term memory: {str(e)}")
 
     def load(self):
         """Load from persistent storage."""
-        if not self.storage_path:
+        if not self.storage:
             return
 
         try:
-            with open(self.storage_path, 'r') as f:
-                data = json.load(f)
-
-            self.entries = [MemoryEntry.from_dict(entry_data)
-                          for entry_data in data.get('entries', [])]
+            entry_dicts = self.storage.load()
+            self.entries = [MemoryEntry.from_dict(entry_data) for entry_data in entry_dicts]
 
             # Rebuild index
             self.index_by_type.clear()
@@ -259,11 +254,14 @@ class LongTermMemory:
                     self.index_by_type[entry.memory_type] = []
                 self.index_by_type[entry.memory_type].append(entry)
 
-            logger.info(f"Loaded {len(self.entries)} memories from {self.storage_path}")
-        except FileNotFoundError:
-            logger.debug(f"No existing memory file found at {self.storage_path}")
+            logger.info(f"Loaded {len(self.entries)} memories from storage")
         except Exception as e:
             logger.error(f"Error loading long-term memory: {str(e)}")
+
+    def close(self):
+        """Close storage connection."""
+        if self.storage:
+            self.storage.close()
 
     def get_all(self) -> List[MemoryEntry]:
         """Get all entries."""
@@ -274,16 +272,17 @@ class Memory:
     """Unified memory system combining short-term and long-term memory."""
 
     def __init__(self, short_term_size: int = 10, storage_path: Optional[str] = None,
-                 auto_consolidate: bool = True):
+                 auto_consolidate: bool = True, use_sqlite: bool = True):
         """Initialize memory system.
 
         Args:
             short_term_size: Size of short-term memory buffer
             storage_path: Path for persistent long-term memory storage
             auto_consolidate: Whether to automatically consolidate memories
+            use_sqlite: If True, use SQLite database; otherwise use JSON (default: True)
         """
         self.short_term = ShortTermMemory(max_size=short_term_size)
-        self.long_term = LongTermMemory(storage_path=storage_path)
+        self.long_term = LongTermMemory(storage_path=storage_path, use_sqlite=use_sqlite)
         self.auto_consolidate = auto_consolidate
 
     def remember(self, content: str, memory_type: str = 'conversation',

@@ -269,26 +269,41 @@ print(f"Total memories: {stats['total_memories']}")
 
 ### Persistent Memory
 
+AgentU supports both **SQLite** (default, recommended) and **JSON** storage backends.
+
 ```python
 from agentu import Agent
 
-# Create agent with persistent memory storage
+# SQLite storage (default) - Fast, indexed, full-text search
 agent = Agent(
     name="persistent_agent",
     enable_memory=True,
-    memory_path="agent_memory.json"  # Saves to file
+    memory_path="agent_memory.db",  # .db for SQLite
+    use_sqlite=True  # Default
 )
 
-# Memories are automatically saved to file
+# JSON storage - Simple file-based storage
+agent_json = Agent(
+    name="json_agent",
+    enable_memory=True,
+    memory_path="agent_memory.json",
+    use_sqlite=False
+)
+
+# Memories are automatically saved
 agent.remember("Important information", store_long_term=True)
 
-# Manually save memory
-agent.save_memory()
-
 # Memory is automatically loaded on next initialization
-agent2 = Agent(name="agent2", memory_path="agent_memory.json")
+agent2 = Agent(name="agent2", memory_path="agent_memory.db")
 memories = agent2.recall(limit=10)  # Previously stored memories are loaded
 ```
+
+**Why SQLite?**
+- ✅ **Faster searches** with indexed queries
+- ✅ **Full-text search** for content
+- ✅ **Better performance** with large datasets
+- ✅ **ACID compliance** for data integrity
+- ✅ **Efficient memory** with on-disk storage
 
 ### Memory Types and Importance
 
