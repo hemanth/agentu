@@ -8,6 +8,7 @@ import logging
 from .tools import Tool
 from .mcp_config import load_mcp_servers
 from .mcp_tool import MCPToolManager
+from .memory import Memory
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 class Agent:
     def __init__(self, name: str, model: str = "llama2", temperature: float = 0.7,
-                 mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False):
+                 mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
+                 enable_memory: bool = True, memory_path: Optional[str] = None,
+                 short_term_size: int = 10):
         """Initialize an Agent.
 
         Args:
@@ -24,6 +27,9 @@ class Agent:
             temperature: Temperature for model generation (default: 0.7)
             mcp_config_path: Optional path to MCP configuration file
             load_mcp_tools: Whether to automatically load tools from MCP servers (default: False)
+            enable_memory: Whether to enable memory system (default: True)
+            memory_path: Path for persistent memory storage (default: None)
+            short_term_size: Size of short-term memory buffer (default: 10)
         """
         self.name = name
         self.model = model
@@ -32,6 +38,13 @@ class Agent:
         self.context = ""
         self.conversation_history = []
         self.mcp_manager = MCPToolManager()
+
+        # Initialize memory system
+        self.memory_enabled = enable_memory
+        self.memory = Memory(
+            short_term_size=short_term_size,
+            storage_path=memory_path
+        ) if enable_memory else None
 
         # Load MCP tools if requested
         if load_mcp_tools:
@@ -103,6 +116,97 @@ class Agent:
     def close_mcp_connections(self):
         """Close all MCP server connections."""
         self.mcp_manager.close_all()
+
+    def remember(self, content: str, memory_type: str = 'conversation',
+                metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
+                store_long_term: bool = False):
+        """Store information in memory.
+
+        Args:
+            content: The content to remember
+            memory_type: Type of memory ('conversation', 'fact', 'task', 'observation')
+            metadata: Additional metadata
+            importance: Importance score (0.0 to 1.0)
+            store_long_term: If True, store directly in long-term memory
+        """
+        if not self.memory_enabled:
+            logger.warning("Memory is not enabled for this agent")
+            return
+
+        self.memory.remember(content, memory_type, metadata, importance, store_long_term)
+
+    def recall(self, query: Optional[str] = None, memory_type: Optional[str] = None,
+              limit: int = 5):
+        """Recall memories.
+
+        Args:
+            query: Search query (if None, returns recent memories)
+            memory_type: Filter by memory type
+            limit: Maximum number of results
+
+        Returns:
+            List of MemoryEntry objects
+        """
+        if not self.memory_enabled:
+            logger.warning("Memory is not enabled for this agent")
+            return []
+
+        return self.memory.recall(query, memory_type, limit)
+
+    def get_memory_context(self, max_entries: int = 5) -> str:
+        """Get formatted context from memories.
+
+        Args:
+            max_entries: Maximum number of memory entries to include
+
+        Returns:
+            Formatted string with memory context
+        """
+        if not self.memory_enabled:
+            return ""
+
+        return self.memory.get_context(max_entries)
+
+    def consolidate_memory(self, importance_threshold: float = 0.6):
+        """Consolidate short-term memories to long-term storage.
+
+        Args:
+            importance_threshold: Minimum importance to consolidate
+        """
+        if not self.memory_enabled:
+            logger.warning("Memory is not enabled for this agent")
+            return
+
+        self.memory.consolidate_to_long_term(importance_threshold)
+
+    def clear_short_term_memory(self):
+        """Clear short-term memory."""
+        if not self.memory_enabled:
+            logger.warning("Memory is not enabled for this agent")
+            return
+
+        self.memory.clear_short_term()
+
+    def save_memory(self):
+        """Save memory to persistent storage."""
+        if not self.memory_enabled:
+            logger.warning("Memory is not enabled for this agent")
+            return
+
+        self.memory.save()
+
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """Get memory statistics.
+
+        Returns:
+            Dictionary with memory stats
+        """
+        if not self.memory_enabled:
+            return {'memory_enabled': False}
+
+        stats = self.memory.stats()
+        stats['memory_enabled'] = True
+        return stats
         
     def set_context(self, context: str) -> None:
         """Set the context for the agent."""
@@ -211,26 +315,48 @@ Example response for calculator:
 
     def process_input(self, user_input: str) -> Dict[str, Any]:
         """Process user input and execute appropriate tool."""
+        # Store user input in memory
+        if self.memory_enabled:
+            self.memory.remember(
+                content=f"User: {user_input}",
+                memory_type='conversation',
+                metadata={'role': 'user'},
+                importance=0.5
+            )
+
         evaluation = self.evaluate_tool_use(user_input)
-        
+
         if not evaluation["selected_tool"]:
             return {"error": "No appropriate tool found"}
-            
+
         result = self.execute_tool(
             evaluation["selected_tool"],
             evaluation["parameters"]
         )
-        
+
         response = {
             "tool_used": evaluation["selected_tool"],
             "parameters": evaluation["parameters"],
             "reasoning": evaluation["reasoning"],
             "result": result
         }
-        
+
+        # Store agent response in memory
+        if self.memory_enabled:
+            self.memory.remember(
+                content=f"Agent: Used {evaluation['selected_tool']} - {evaluation['reasoning']}",
+                memory_type='conversation',
+                metadata={
+                    'role': 'agent',
+                    'tool': evaluation['selected_tool'],
+                    'parameters': evaluation['parameters']
+                },
+                importance=0.6
+            )
+
         self.conversation_history.append({
             "user_input": user_input,
             "response": response
         })
-        
+
         return response
