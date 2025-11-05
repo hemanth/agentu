@@ -1,44 +1,49 @@
 """Search functionality for AgentU."""
+import asyncio
 from typing import List, Dict, Any, Optional
 from duckduckgo_search import DDGS
 
 from .agent import Agent
 from .tools import Tool
 
-def search_duckduckgo(
+async def search_duckduckgo(
     query: str,
     max_results: int = 3,
     region: str = "wt-wt",
     safesearch: str = "moderate"
 ) -> List[Dict[str, str]]:
     """
-    Search DuckDuckGo and return results.
-    
+    Search DuckDuckGo and return results (async).
+
     Args:
         query: Search query string
         max_results: Maximum number of results to return (default: 3)
         region: Region for search results (default: "wt-wt" for worldwide)
         safesearch: SafeSearch setting ("on", "moderate", or "off", default: "moderate")
-    
+
     Returns:
         List of dictionaries containing search results with title, link, and snippet
     """
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(
-                query,
-                max_results=max_results,
-                region=region,
-                safesearch=safesearch
-            ))
-            return [
-                {
-                    "title": r["title"],
-                    "link": r["link"],
-                    "snippet": r["body"]
-                }
-                for r in results
-            ]
+        # Run blocking search in executor
+        loop = asyncio.get_event_loop()
+        def _search():
+            with DDGS() as ddgs:
+                results = list(ddgs.text(
+                    query,
+                    max_results=max_results,
+                    region=region,
+                    safesearch=safesearch
+                ))
+                return [
+                    {
+                        "title": r["title"],
+                        "link": r["link"],
+                        "snippet": r["body"]
+                    }
+                    for r in results
+                ]
+        return await loop.run_in_executor(None, _search)
     except Exception as e:
         return [{"error": f"Search failed: {str(e)}"}]
 
@@ -77,7 +82,7 @@ class SearchAgent(Agent):
             "4. Provide proper attribution for sources"
         )
     
-    def search(
+    async def search(
         self,
         query: str,
         max_results: Optional[int] = None,
@@ -85,14 +90,14 @@ class SearchAgent(Agent):
         safesearch: str = "moderate"
     ) -> Dict[str, Any]:
         """
-        Perform a web search with the given query.
-        
+        Perform a web search with the given query (async).
+
         This is a convenience method that wraps the process_input method
         with search-specific parameters.
         """
         if max_results is None:
             max_results = self.max_results
-            
-        return self.process_input(
+
+        return await self.process_input(
             f"Search for: {query}"
         )

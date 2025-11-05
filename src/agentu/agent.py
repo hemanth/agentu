@@ -1,5 +1,7 @@
 import requests
 import json
+import asyncio
+import aiohttp
 from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -223,43 +225,41 @@ class Agent:
             tools_str += f"Parameters: {json.dumps(tool.parameters, indent=2)}\n\n"
         return tools_str
 
-    def _call_ollama(self, prompt: str) -> str:
-        """Make an API call to Ollama and handle streaming response."""
+    async def _call_ollama(self, prompt: str) -> str:
+        """Make an async API call to Ollama."""
         try:
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "temperature": self.temperature,
-                    "stream": False  # Disable streaming for simpler handling
-                },
-                timeout=30
-            )
-            response.raise_for_status()
-            
-            # Handle the response
-            full_response = ""
-            response_json = response.json()
-            
-            if "error" in response_json:
-                logger.error(f"Ollama API error: {response_json['error']}")
-                raise Exception(response_json['error'])
-                
-            full_response = response_json.get("response", "")
-            
-            if not full_response:
-                logger.error("Empty response from Ollama")
-                raise Exception("Empty response from Ollama")
-                
-            return full_response
-            
-        except requests.exceptions.RequestException as e:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "temperature": self.temperature,
+                        "stream": False
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    response.raise_for_status()
+                    response_json = await response.json()
+
+                    if "error" in response_json:
+                        logger.error(f"Ollama API error: {response_json['error']}")
+                        raise Exception(response_json['error'])
+
+                    full_response = response_json.get("response", "")
+
+                    if not full_response:
+                        logger.error("Empty response from Ollama")
+                        raise Exception("Empty response from Ollama")
+
+                    return full_response
+
+        except aiohttp.ClientError as e:
             logger.error(f"Error calling Ollama: {str(e)}")
             raise
 
-    def evaluate_tool_use(self, user_input: str) -> Dict[str, Any]:
-        """Evaluate which tool to use based on user input."""
+    async def evaluate_tool_use(self, user_input: str) -> Dict[str, Any]:
+        """Evaluate which tool to use based on user input (async)."""
         prompt = f"""Context: {self.context}
 
 {self._format_tools_for_prompt()}
@@ -294,7 +294,7 @@ Example response for calculator:
 }}"""
 
         try:
-            response = self._call_ollama(prompt)
+            response = await self._call_ollama(prompt)
             return json.loads(response)
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing Ollama response: {str(e)}")
@@ -315,8 +315,8 @@ Example response for calculator:
                     raise
         raise ValueError(f"Tool {tool_name} not found")
 
-    def process_input(self, user_input: str) -> Dict[str, Any]:
-        """Process user input and execute appropriate tool."""
+    async def process_input(self, user_input: str) -> Dict[str, Any]:
+        """Process user input and execute appropriate tool (async)."""
         # Store user input in memory
         if self.memory_enabled:
             self.memory.remember(
@@ -326,7 +326,7 @@ Example response for calculator:
                 importance=0.5
             )
 
-        evaluation = self.evaluate_tool_use(user_input)
+        evaluation = await self.evaluate_tool_use(user_input)
 
         if not evaluation["selected_tool"]:
             return {"error": "No appropriate tool found"}
