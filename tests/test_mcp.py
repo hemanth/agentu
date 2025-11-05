@@ -484,7 +484,8 @@ class TestEndToEndIntegration:
     """End-to-end integration tests."""
 
     @patch('agentu.mcp_transport.requests.post')
-    def test_complete_workflow(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_complete_workflow(self, mock_post):
         """Test complete workflow from config to tool execution."""
         # Mock initialize
         init_response = Mock()
@@ -544,7 +545,7 @@ class TestEndToEndIntegration:
         assert tools[0].name == "math_server_calculator"
 
         # Execute tool
-        result = agent.execute_tool("math_server_calculator", {
+        result = await agent.execute_tool("math_server_calculator", {
             "operation": "add",
             "x": 40,
             "y": 2
