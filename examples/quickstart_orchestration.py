@@ -1,5 +1,6 @@
 """Quick start example for multi-agent orchestration."""
 
+import asyncio
 from agentu.orchestrator import (
     Orchestrator,
     AgentRole,
@@ -9,7 +10,7 @@ from agentu.orchestrator import (
 )
 
 
-def main():
+async def main():
     """Run a simple multi-agent orchestration example."""
 
     print("Creating Multi-Agent System...")
@@ -94,7 +95,7 @@ def main():
     print("   Skipping actual execution in demo mode...")
 
     # In real usage, you would do:
-    # results = orchestrator.execute(tasks)
+    # results = await orchestrator.execute(tasks)
     # for result in results:
     #     print(f"\n   Result: {result}")
 
@@ -112,10 +113,10 @@ def main():
     print("\n" + "="*60)
     print("Multi-Agent System Ready!")
     print("\nTo execute tasks, ensure Ollama is running and call:")
-    print("  results = orchestrator.execute(tasks)")
+    print("  results = await orchestrator.execute(tasks)")
     print("\nFor more examples, see examples/multi_agent_example.py")
     print("="*60)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

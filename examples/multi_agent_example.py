@@ -1,5 +1,6 @@
 """Example demonstrating multi-agent orchestration."""
 
+import asyncio
 from agentu import Agent
 from agentu.orchestrator import (
     Orchestrator,
@@ -10,7 +11,7 @@ from agentu.orchestrator import (
 )
 
 
-def example_sequential_execution():
+async def example_sequential_execution():
     """Example of sequential task execution with multiple specialized agents."""
     print("\n=== Sequential Execution Example ===\n")
 
@@ -61,7 +62,7 @@ def example_sequential_execution():
     ]
 
     # Execute tasks
-    results = orchestrator.execute(tasks)
+    results = await orchestrator.execute(tasks)
 
     # Print results
     for i, result in enumerate(results):
@@ -80,7 +81,7 @@ def example_sequential_execution():
         print(f"  {key}: {value}")
 
 
-def example_parallel_execution():
+async def example_parallel_execution():
     """Example of parallel task execution with multiple agents."""
     print("\n=== Parallel Execution Example ===\n")
 
@@ -131,7 +132,7 @@ def example_parallel_execution():
     ]
 
     # Execute tasks in parallel
-    results = orchestrator.execute_task_parallel(tasks, max_workers=3)
+    results = await orchestrator.execute_task_parallel(tasks, max_workers=3)
 
     # Print results
     print("\nParallel Execution Results:")
@@ -144,7 +145,7 @@ def example_parallel_execution():
     print(f"\nTotal tasks completed: {len([r for r in results if r['status'] == 'completed'])}")
 
 
-def example_hierarchical_execution():
+async def example_hierarchical_execution():
     """Example of hierarchical execution with a manager coordinating workers."""
     print("\n=== Hierarchical Execution Example ===\n")
 
@@ -188,7 +189,7 @@ def example_hierarchical_execution():
     ]
 
     # Execute hierarchically
-    result = orchestrator.execute_hierarchical(
+    result = await orchestrator.execute_hierarchical(
         manager_agent="ManagerBot",
         worker_tasks=worker_tasks
     )
@@ -203,7 +204,7 @@ def example_hierarchical_execution():
     print(result['manager_summary'])
 
 
-def example_debate_mode():
+async def example_debate_mode():
     """Example of debate mode where agents discuss and reach consensus."""
     print("\n=== Debate Mode Example ===\n")
 
@@ -238,7 +239,7 @@ def example_debate_mode():
 
     # Run debate
     topic = "Should companies invest heavily in AI automation despite potential job displacement?"
-    result = orchestrator.execute_debate(
+    result = await orchestrator.execute_debate(
         topic=topic,
         agents=["Optimist", "Realist", "Skeptic"],
         rounds=2
@@ -259,7 +260,7 @@ def example_debate_mode():
     print(result['consensus'])
 
 
-def example_custom_agent_with_tools():
+async def example_custom_agent_with_tools():
     """Example showing how to add tools to orchestrated agents."""
     print("\n=== Custom Agent with Tools Example ===\n")
 
@@ -322,44 +323,49 @@ def example_custom_agent_with_tools():
     ]
 
     # Execute
-    results = orchestrator.execute(tasks)
+    results = await orchestrator.execute(tasks)
 
     print("\nCalculation Results:")
     for result in results:
         print(f"  {result['task']}: {result.get('result', 'N/A')}")
 
 
-if __name__ == "__main__":
+async def run_all_examples():
+    """Run all examples."""
     print("="*70)
     print("Multi-Agent Orchestration Examples")
     print("="*70)
 
     # Run examples
     try:
-        example_sequential_execution()
+        await example_sequential_execution()
     except Exception as e:
         print(f"Sequential example error: {e}")
 
     try:
-        example_parallel_execution()
+        await example_parallel_execution()
     except Exception as e:
         print(f"Parallel example error: {e}")
 
     try:
-        example_hierarchical_execution()
+        await example_hierarchical_execution()
     except Exception as e:
         print(f"Hierarchical example error: {e}")
 
     try:
-        example_debate_mode()
+        await example_debate_mode()
     except Exception as e:
         print(f"Debate example error: {e}")
 
     try:
-        example_custom_agent_with_tools()
+        await example_custom_agent_with_tools()
     except Exception as e:
         print(f"Custom agent example error: {e}")
 
     print("\n" + "="*70)
     print("Examples completed!")
     print("="*70)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_all_examples())

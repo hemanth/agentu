@@ -157,27 +157,31 @@ auth = AuthConfig(type="custom", headers={"Auth": "value"})
 
 ## Multi-Agent Orchestration
 
-Coordinate specialized agents to solve complex tasks.
+Coordinate specialized agents to solve complex tasks with async/await.
 
 ```python
+import asyncio
 from agentu.orchestrator import Orchestrator, AgentRole, Task, create_specialized_agent
 
-# Create orchestrator with agents
-orchestrator = Orchestrator()
+async def main():
+    # Create orchestrator with agents
+    orchestrator = Orchestrator()
 
-researcher, researcher_cap = create_specialized_agent("ResearchBot", AgentRole.RESEARCHER)
-analyst, analyst_cap = create_specialized_agent("AnalystBot", AgentRole.ANALYST)
+    researcher, researcher_cap = create_specialized_agent("ResearchBot", AgentRole.RESEARCHER)
+    analyst, analyst_cap = create_specialized_agent("AnalystBot", AgentRole.ANALYST)
 
-orchestrator.add_agent(researcher, researcher_cap)
-orchestrator.add_agent(analyst, analyst_cap)
+    orchestrator.add_agent(researcher, researcher_cap)
+    orchestrator.add_agent(analyst, analyst_cap)
 
-# Define and execute tasks
-tasks = [
-    Task(description="Research AI safety trends", required_skills=["research"]),
-    Task(description="Analyze findings", required_skills=["analyze"])
-]
+    # Define and execute tasks
+    tasks = [
+        Task(description="Research AI safety trends", required_skills=["research"]),
+        Task(description="Analyze findings", required_skills=["analyze"])
+    ]
 
-results = orchestrator.execute(tasks)
+    results = await orchestrator.execute(tasks)
+
+asyncio.run(main())
 ```
 
 **Execution Modes:** Sequential, Parallel, Hierarchical, Debate
