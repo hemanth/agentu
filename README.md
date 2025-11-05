@@ -166,12 +166,11 @@ from agentu.orchestrator import Orchestrator, AgentRole, Task, make_agent
 async def main():
     orchestrator = Orchestrator()
 
-    # Create specialized agents
-    researcher = make_agent("ResearchBot", AgentRole.RESEARCHER)
-    analyst = make_agent("AnalystBot", AgentRole.ANALYST)
-
-    orchestrator.add_agent(researcher)
-    orchestrator.add_agent(analyst)
+    # Create and add agents
+    orchestrator.add_agents([
+        make_agent("ResearchBot", AgentRole.RESEARCHER),
+        make_agent("AnalystBot", AgentRole.ANALYST)
+    ])
 
     # Define and execute tasks
     tasks = [

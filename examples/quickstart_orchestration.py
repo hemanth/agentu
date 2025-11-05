@@ -39,9 +39,7 @@ async def main():
 
     # Add agents
     print("\n2. Adding agents to orchestrator...")
-    orchestrator.add_agent(researcher)
-    orchestrator.add_agent(analyst)
-    orchestrator.add_agent(writer)
+    orchestrator.add_agents([researcher, analyst, writer])
     print(f"   - Added {len(orchestrator.agents)} agents")
 
     # Create tasks
