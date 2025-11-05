@@ -22,16 +22,13 @@ pip install agentu
 ### Simple Agent
 
 ```python
-from agentu import Agent
+import asyncio
+from agentu import Agent, Tool
 
+# Create agent
 agent = Agent(name="assistant", model="llama3")
 
-# Memory is enabled by default with SQLite storage
-agent.remember("User prefers concise responses", importance=0.9)
-
-# Add custom tools
-from agentu import Tool
-
+# Add a custom tool
 def calculator(x: float, y: float, op: str) -> float:
     ops = {"+": x+y, "-": x-y, "*": x*y, "/": x/y}
     return ops[op]
@@ -42,15 +39,28 @@ agent.add_tool(Tool(
     function=calculator,
     parameters={"x": "float", "y": "float", "op": "str: +,-,*,/"}
 ))
+
+# Execute with natural language
+async def main():
+    result = await agent.process_input("Calculate 15 times 7")
+    print(result)
+    # {'tool_used': 'calc', 'parameters': {'x': 15, 'y': 7, 'op': '*'}, 'result': 105}
+
+asyncio.run(main())
 ```
 
 ### Search Agent
 
 ```python
+import asyncio
 from agentu import SearchAgent
 
-agent = SearchAgent(name="researcher", max_results=5)
-results = agent.search("latest AI developments")
+async def main():
+    agent = SearchAgent(name="researcher", max_results=5)
+    results = await agent.search("latest AI developments")
+    print(results)
+
+asyncio.run(main())
 ```
 
 ## Memory System
@@ -298,18 +308,27 @@ Agent(
     enable_memory: bool = True,
     memory_path: Optional[str] = None,
     short_term_size: int = 10,
-    use_sqlite: bool = True
+    use_sqlite: bool = True,
+    role: Optional[str] = None,
+    skills: Optional[List[str]] = None,
+    priority: int = 5
 )
 ```
 
-**Methods:**
+**Main Methods:**
+- `await process_input(user_input: str)` - Execute agent with natural language input (returns dict with tool_used, result)
+- `await execute_tool(name: str, params: dict)` - Execute a specific tool directly
+
+**Tool Management:**
 - `add_tool(tool: Tool)` - Add a custom tool
 - `add_mcp_server(config: MCPServerConfig)` - Connect to MCP server
 - `load_mcp_tools(config_path: str)` - Load multiple MCP servers
+
+**Memory:**
 - `remember(content, memory_type, importance)` - Store memory
 - `recall(query, memory_type, limit)` - Retrieve memories
-- `execute_tool(name, params)` - Execute a tool
-- `process_input(user_input)` - Process user request
+- `get_memory_context(max_entries)` - Get formatted context
+- `consolidate_memory(threshold)` - Move important memories to long-term
 
 ### Memory
 
