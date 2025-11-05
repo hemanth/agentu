@@ -161,17 +161,17 @@ Coordinate specialized agents to solve complex tasks with async/await.
 
 ```python
 import asyncio
-from agentu.orchestrator import Orchestrator, AgentRole, Task, create_specialized_agent
+from agentu.orchestrator import Orchestrator, AgentRole, Task, make_agent
 
 async def main():
-    # Create orchestrator with agents
     orchestrator = Orchestrator()
 
-    researcher, researcher_cap = create_specialized_agent("ResearchBot", AgentRole.RESEARCHER)
-    analyst, analyst_cap = create_specialized_agent("AnalystBot", AgentRole.ANALYST)
+    # Create specialized agents
+    researcher = make_agent("ResearchBot", AgentRole.RESEARCHER)
+    analyst = make_agent("AnalystBot", AgentRole.ANALYST)
 
-    orchestrator.add_agent(researcher, researcher_cap)
-    orchestrator.add_agent(analyst, analyst_cap)
+    orchestrator.add_agent(researcher)
+    orchestrator.add_agent(analyst)
 
     # Define and execute tasks
     tasks = [

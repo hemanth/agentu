@@ -20,7 +20,9 @@ class Agent:
     def __init__(self, name: str, model: str = "llama2", temperature: float = 0.7,
                  mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
                  enable_memory: bool = True, memory_path: Optional[str] = None,
-                 short_term_size: int = 10, use_sqlite: bool = True):
+                 short_term_size: int = 10, use_sqlite: bool = True,
+                 role: Optional[str] = None, skills: Optional[List[str]] = None,
+                 priority: int = 5):
         """Initialize an Agent.
 
         Args:
@@ -33,6 +35,9 @@ class Agent:
             memory_path: Path for persistent memory storage (default: None)
             short_term_size: Size of short-term memory buffer (default: 10)
             use_sqlite: If True, use SQLite database for memory; otherwise use JSON (default: True)
+            role: Agent role for orchestration (optional)
+            skills: List of agent skills for task matching (optional)
+            priority: Agent priority for task assignment (default: 5)
         """
         self.name = name
         self.model = model
@@ -49,6 +54,11 @@ class Agent:
             storage_path=memory_path,
             use_sqlite=use_sqlite
         ) if enable_memory else None
+
+        # Orchestration attributes
+        self.role = role
+        self.skills = tuple(skills) if skills else ()
+        self.priority = priority
 
         # Load MCP tools if requested
         if load_mcp_tools:
