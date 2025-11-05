@@ -208,9 +208,8 @@ def create_stats(state: OrchestratorState) -> Dict[str, Any]:
 async def execute_single_task(agent: Agent, task: Task) -> Dict[str, Any]:
     """Execute a single task with an agent (impure - async I/O operation)."""
     try:
-        # Run blocking agent call in executor
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, agent.process_input, task.description)
+        # Agent.process_input is now async
+        result = await agent.process_input(task.description)
         return {
             'task': task.description,
             'agent': task.assigned_agent,
@@ -450,9 +449,8 @@ class Orchestrator:
         manager = self._state.agents[manager_agent]
         manager_prompt = f"Analyze and summarize the following results:\n\n{summary}"
 
-        # Run manager in executor
-        loop = asyncio.get_event_loop()
-        manager_result = await loop.run_in_executor(None, manager.process_input, manager_prompt)
+        # Manager is now async
+        manager_result = await manager.process_input(manager_prompt)
 
         return {
             'mode': 'hierarchical',
@@ -467,7 +465,6 @@ class Orchestrator:
             raise ValueError("One or more agents not found")
 
         debate_history = []
-        loop = asyncio.get_event_loop()
 
         for round_num in range(rounds):
             round_responses = []
@@ -480,7 +477,7 @@ class Orchestrator:
                 prompt = f"{context}Provide your perspective on this topic:"
 
                 # Impure: Get response (async)
-                response = await loop.run_in_executor(None, agent.process_input, prompt)
+                response = await agent.process_input(prompt)
 
                 round_responses.append({
                     'round': round_num + 1,
@@ -499,7 +496,7 @@ class Orchestrator:
                 summary += f"\nRound {resp['round']} - {resp['agent']}:\n{resp['response']}\n"
 
         consensus_prompt = f"{summary}\n\nProvide a consensus summary integrating all perspectives:"
-        consensus = await loop.run_in_executor(None, synthesizer.process_input, consensus_prompt)
+        consensus = await synthesizer.process_input(consensus_prompt)
 
         return {
             'mode': 'debate',

@@ -7,17 +7,19 @@ def test_search_agent_creation():
     assert len(agent.tools) == 1
     assert agent.tools[0].name == "web_search"
 
-def test_search_tool():
-    results = search_duckduckgo("python programming", max_results=1)
+@pytest.mark.asyncio
+async def test_search_tool():
+    results = await search_duckduckgo("python programming", max_results=1)
     assert isinstance(results, list)
     assert len(results) <= 1
     if results and "error" not in results[0]:
         assert all(key in results[0] for key in ["title", "link", "snippet"])
 
 @pytest.mark.skip(reason="Requires Ollama running locally")
-def test_search_agent_search():
+@pytest.mark.asyncio
+async def test_search_agent_search():
     agent = SearchAgent("test_search")
-    result = agent.search("python programming", max_results=1)
+    result = await agent.search("python programming", max_results=1)
     assert "tool_used" in result
     assert result["tool_used"] == "web_search"
     assert "parameters" in result
