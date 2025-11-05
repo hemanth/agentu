@@ -304,12 +304,16 @@ Example response for calculator:
                 "reasoning": "Error parsing response"
             }
 
-    def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Any:
-        """Execute a specific tool with given parameters."""
+    async def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Any:
+        """Execute a specific tool with given parameters (async)."""
         for tool in self.tools:
             if tool.name == tool_name:
                 try:
-                    return tool.function(**parameters)
+                    result = tool.function(**parameters)
+                    # Check if result is a coroutine (async function)
+                    if asyncio.iscoroutine(result):
+                        return await result
+                    return result
                 except Exception as e:
                     logger.error(f"Error executing tool {tool_name}: {str(e)}")
                     raise
@@ -331,7 +335,7 @@ Example response for calculator:
         if not evaluation["selected_tool"]:
             return {"error": "No appropriate tool found"}
 
-        result = self.execute_tool(
+        result = await self.execute_tool(
             evaluation["selected_tool"],
             evaluation["parameters"]
         )
