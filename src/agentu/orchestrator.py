@@ -311,8 +311,15 @@ class Orchestrator:
         """Get shared memory (mutable for backwards compatibility)."""
         return self._state.shared_data
 
-    def add_agent(self, agent: Agent, capability: AgentCapability) -> None:
+    def add_agent(self, agent: Agent) -> None:
         """Add an agent to the orchestrator."""
+        # Create capability from agent attributes
+        capability = AgentCapability(
+            role=AgentRole(agent.role) if agent.role else AgentRole.CUSTOM,
+            skills=agent.skills,
+            priority=agent.priority,
+            description=f"{agent.role or 'Custom'} agent: {agent.name}"
+        )
         self._state = self._state.with_agent(agent.name, agent, capability)
         logger.info(f"Added agent '{agent.name}' with role {capability.role.value}")
 
@@ -519,16 +526,16 @@ class Orchestrator:
 
 # Helper functions
 
-def create_specialized_agent(
+def make_agent(
     name: str,
     role: AgentRole,
     model: str = "llama2",
     skills: Optional[List[str]] = None,
     **agent_kwargs
-) -> Tuple[Agent, AgentCapability]:
-    """Create specialized agent with capabilities (pure + impure)."""
+) -> Agent:
+    """Create specialized agent with role and skills."""
 
-    # Pure: Define default skills
+    # Define default skills
     default_skills_map = {
         AgentRole.RESEARCHER: ["research", "search", "analyze", "gather information"],
         AgentRole.CODER: ["code", "programming", "debug", "implement", "refactor"],
@@ -541,10 +548,7 @@ def create_specialized_agent(
 
     agent_skills = skills or default_skills_map.get(role, [])
 
-    # Impure: Create agent
-    agent = Agent(name=name, model=model, **agent_kwargs)
-
-    # Pure: Define context
+    # Define context
     role_contexts = {
         AgentRole.RESEARCHER: "You are a research specialist focused on gathering and analyzing information.",
         AgentRole.CODER: "You are a programming expert focused on writing and debugging code.",
@@ -555,14 +559,16 @@ def create_specialized_agent(
         AgentRole.COORDINATOR: "You are a coordination specialist focused on managing multiple tasks and agents.",
     }
 
-    if role in role_contexts:
-        agent.set_context(role_contexts[role])
-
-    # Pure: Create capability (with immutable tuple)
-    capability = AgentCapability(
-        role=role,
-        skills=tuple(agent_skills),
-        description=f"{role.value.capitalize()} agent specialized in {', '.join(agent_skills[:3])}"
+    # Create agent with role and skills
+    new_agent = Agent(
+        name=name,
+        model=model,
+        role=role.value,
+        skills=agent_skills,
+        **agent_kwargs
     )
 
-    return agent, capability
+    if role in role_contexts:
+        new_agent.set_context(role_contexts[role])
+
+    return new_agent

@@ -9,7 +9,7 @@ from agentu.orchestrator import (
     Task,
     AgentCapability,
     Message,
-    create_specialized_agent
+    make_agent
 )
 
 
@@ -22,14 +22,14 @@ def basic_orchestrator():
 @pytest.fixture
 def sample_agents():
     """Create sample agents for testing."""
-    researcher, researcher_cap = create_specialized_agent(
+    researcher = make_agent(
         name="Researcher",
         role=AgentRole.RESEARCHER,
         model="llama2",
         enable_memory=False
     )
 
-    analyst, analyst_cap = create_specialized_agent(
+    analyst = make_agent(
         name="Analyst",
         role=AgentRole.ANALYST,
         model="llama2",
@@ -37,8 +37,8 @@ def sample_agents():
     )
 
     return {
-        'researcher': (researcher, researcher_cap),
-        'analyst': (analyst, analyst_cap)
+        'researcher': (researcher),
+        'analyst': (analyst)
     }
 
 
@@ -195,9 +195,9 @@ class TestOrchestrator:
 
     def test_add_agent(self, basic_orchestrator, sample_agents):
         """Test adding an agent."""
-        researcher, researcher_cap = sample_agents['researcher']
+        researcher = sample_agents['researcher']
 
-        basic_orchestrator.add_agent(researcher, researcher_cap)
+        basic_orchestrator.add_agent(researcher)
 
         assert "Researcher" in basic_orchestrator.agents
         assert "Researcher" in basic_orchestrator.agent_capabilities
@@ -205,9 +205,9 @@ class TestOrchestrator:
 
     def test_remove_agent(self, basic_orchestrator, sample_agents):
         """Test removing an agent."""
-        researcher, researcher_cap = sample_agents['researcher']
+        researcher = sample_agents['researcher']
 
-        basic_orchestrator.add_agent(researcher, researcher_cap)
+        basic_orchestrator.add_agent(researcher)
         assert "Researcher" in basic_orchestrator.agents
 
         basic_orchestrator.remove_agent("Researcher")
@@ -260,11 +260,11 @@ class TestOrchestrator:
 
     def test_route_task(self, basic_orchestrator, sample_agents):
         """Test task routing to appropriate agent."""
-        researcher, researcher_cap = sample_agents['researcher']
-        analyst, analyst_cap = sample_agents['analyst']
+        researcher = sample_agents['researcher']
+        analyst = sample_agents['analyst']
 
-        basic_orchestrator.add_agent(researcher, researcher_cap)
-        basic_orchestrator.add_agent(analyst, analyst_cap)
+        basic_orchestrator.add_agent(researcher)
+        basic_orchestrator.add_agent(analyst)
 
         # Task requiring research skills
         research_task = Task(
@@ -293,11 +293,11 @@ class TestOrchestrator:
 
     def test_get_stats(self, basic_orchestrator, sample_agents):
         """Test getting orchestrator statistics."""
-        researcher, researcher_cap = sample_agents['researcher']
-        analyst, analyst_cap = sample_agents['analyst']
+        researcher = sample_agents['researcher']
+        analyst = sample_agents['analyst']
 
-        basic_orchestrator.add_agent(researcher, researcher_cap)
-        basic_orchestrator.add_agent(analyst, analyst_cap)
+        basic_orchestrator.add_agent(researcher)
+        basic_orchestrator.add_agent(analyst)
 
         stats = basic_orchestrator.get_stats()
 
@@ -327,11 +327,11 @@ class TestOrchestrator:
 
 
 class TestCreateSpecializedAgent:
-    """Test create_specialized_agent helper function."""
+    """Test make_agent helper function."""
 
     def test_create_researcher_agent(self):
         """Test creating a researcher agent."""
-        agent, capability = create_specialized_agent(
+        agent = make_agent(
             name="TestResearcher",
             role=AgentRole.RESEARCHER,
             model="llama2",
@@ -340,28 +340,28 @@ class TestCreateSpecializedAgent:
 
         assert agent.name == "TestResearcher"
         assert agent.model == "llama2"
-        assert capability.role == AgentRole.RESEARCHER
-        assert "research" in capability.skills
-        assert "search" in capability.skills
+        assert agent.role == "researcher"
+        assert "research" in agent.skills
+        assert "search" in agent.skills
 
     def test_create_coder_agent(self):
         """Test creating a coder agent."""
-        agent, capability = create_specialized_agent(
+        agent = make_agent(
             name="TestCoder",
             role=AgentRole.CODER,
             model="llama2",
             enable_memory=False
         )
 
-        assert capability.role == AgentRole.CODER
-        assert "code" in capability.skills
-        assert "programming" in capability.skills
+        assert agent.role == "coder"
+        assert "code" in agent.skills
+        assert "programming" in agent.skills
 
     def test_create_custom_skills(self):
         """Test creating agent with custom skills."""
         custom_skills = ["skill1", "skill2", "skill3"]
 
-        agent, capability = create_specialized_agent(
+        agent = make_agent(
             name="CustomAgent",
             role=AgentRole.CUSTOM,
             model="llama2",
@@ -370,11 +370,11 @@ class TestCreateSpecializedAgent:
         )
 
         # Skills are stored as tuples (immutable)
-        assert capability.skills == tuple(custom_skills)
+        assert agent.skills == tuple(custom_skills)
 
     def test_agent_context_set(self):
         """Test that agent context is set based on role."""
-        agent, _ = create_specialized_agent(
+        agent = make_agent(
             name="TestAgent",
             role=AgentRole.RESEARCHER,
             enable_memory=False
@@ -415,19 +415,19 @@ class TestIntegration:
         orch = Orchestrator(execution_mode=ExecutionMode.SEQUENTIAL)
 
         # Create agents
-        researcher, researcher_cap = create_specialized_agent(
+        researcher = make_agent(
             name="Researcher",
             role=AgentRole.RESEARCHER
         )
 
-        analyst, analyst_cap = create_specialized_agent(
+        analyst = make_agent(
             name="Analyst",
             role=AgentRole.ANALYST
         )
 
         # Register agents
-        orch.register_agent(researcher, researcher_cap)
-        orch.register_agent(analyst, analyst_cap)
+        orch.register_agent(researcher)
+        orch.register_agent(analyst)
 
         # Create tasks
         tasks = [
@@ -456,7 +456,7 @@ class TestIntegration:
         # Create multiple coder agents
         agents = []
         for i in range(3):
-            agent, cap = create_specialized_agent(
+            agent, cap = make_agent(
                 name=f"Coder{i}",
                 role=AgentRole.CODER
             )

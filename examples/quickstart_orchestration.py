@@ -6,7 +6,7 @@ from agentu.orchestrator import (
     AgentRole,
     ExecutionMode,
     Task,
-    create_specialized_agent
+    make_agent
 )
 
 
@@ -25,38 +25,23 @@ async def main():
     # Create specialized agents
     print("\n1. Creating specialized agents...")
 
-    researcher, researcher_cap = create_specialized_agent(
-        name="Dr. Research",
-        role=AgentRole.RESEARCHER,
-        model="llama2",
-        enable_memory=False  # Disable memory for demo
-    )
-    print(f"   - Created {researcher.name} (Role: {researcher_cap.role.value})")
-    print(f"     Skills: {', '.join(researcher_cap.skills)}")
+    researcher = make_agent("Dr. Research", AgentRole.RESEARCHER, model="llama2", enable_memory=False)
+    print(f"   - Created {researcher.name} (Role: {researcher.role})")
+    print(f"     Skills: {', '.join(researcher.skills)}")
 
-    analyst, analyst_cap = create_specialized_agent(
-        name="Data Analyst",
-        role=AgentRole.ANALYST,
-        model="llama2",
-        enable_memory=False
-    )
-    print(f"   - Created {analyst.name} (Role: {analyst_cap.role.value})")
-    print(f"     Skills: {', '.join(analyst_cap.skills)}")
+    analyst = make_agent("Data Analyst", AgentRole.ANALYST, model="llama2", enable_memory=False)
+    print(f"   - Created {analyst.name} (Role: {analyst.role})")
+    print(f"     Skills: {', '.join(analyst.skills)}")
 
-    writer, writer_cap = create_specialized_agent(
-        name="Tech Writer",
-        role=AgentRole.WRITER,
-        model="llama2",
-        enable_memory=False
-    )
-    print(f"   - Created {writer.name} (Role: {writer_cap.role.value})")
-    print(f"     Skills: {', '.join(writer_cap.skills)}")
+    writer = make_agent("Tech Writer", AgentRole.WRITER, model="llama2", enable_memory=False)
+    print(f"   - Created {writer.name} (Role: {writer.role})")
+    print(f"     Skills: {', '.join(writer.skills)}")
 
     # Add agents
     print("\n2. Adding agents to orchestrator...")
-    orchestrator.add_agent(researcher, researcher_cap)
-    orchestrator.add_agent(analyst, analyst_cap)
-    orchestrator.add_agent(writer, writer_cap)
+    orchestrator.add_agent(researcher)
+    orchestrator.add_agent(analyst)
+    orchestrator.add_agent(writer)
     print(f"   - Added {len(orchestrator.agents)} agents")
 
     # Create tasks

@@ -7,7 +7,7 @@ from agentu.orchestrator import (
     AgentRole,
     ExecutionMode,
     Task,
-    create_specialized_agent
+    agent
 )
 
 
@@ -22,28 +22,28 @@ async def example_sequential_execution():
     )
 
     # Create specialized agents
-    researcher, researcher_cap = create_specialized_agent(
+    researcher = make_agent(
         name="ResearchBot",
         role=AgentRole.RESEARCHER,
         model="llama2"
     )
 
-    analyst, analyst_cap = create_specialized_agent(
+    analyst = make_agent(
         name="AnalystBot",
         role=AgentRole.ANALYST,
         model="llama2"
     )
 
-    writer, writer_cap = create_specialized_agent(
+    writer = make_agent(
         name="WriterBot",
         role=AgentRole.WRITER,
         model="llama2"
     )
 
     # Add agents
-    orchestrator.add_agent(researcher, researcher_cap)
-    orchestrator.add_agent(analyst, analyst_cap)
-    orchestrator.add_agent(writer, writer_cap)
+    orchestrator.add_agent(researcher)
+    orchestrator.add_agent(analyst)
+    orchestrator.add_agent(writer)
 
     # Create tasks
     tasks = [
@@ -92,19 +92,19 @@ async def example_parallel_execution():
     )
 
     # Create multiple coder agents
-    coder1, coder1_cap = create_specialized_agent(
+    coder1, coder1_cap = make_agent(
         name="CoderBot1",
         role=AgentRole.CODER,
         model="llama2"
     )
 
-    coder2, coder2_cap = create_specialized_agent(
+    coder2, coder2_cap = make_agent(
         name="CoderBot2",
         role=AgentRole.CODER,
         model="llama2"
     )
 
-    coder3, coder3_cap = create_specialized_agent(
+    coder3, coder3_cap = make_agent(
         name="CoderBot3",
         role=AgentRole.CODER,
         model="llama2"
@@ -152,20 +152,20 @@ async def example_hierarchical_execution():
     orchestrator = Orchestrator(name="Hierarchical Orchestrator")
 
     # Create manager agent
-    manager, manager_cap = create_specialized_agent(
+    manager, manager_cap = make_agent(
         name="ManagerBot",
         role=AgentRole.COORDINATOR,
         model="llama2"
     )
 
     # Create worker agents
-    researcher, researcher_cap = create_specialized_agent(
+    researcher = make_agent(
         name="ResearchWorker",
         role=AgentRole.RESEARCHER,
         model="llama2"
     )
 
-    analyst, analyst_cap = create_specialized_agent(
+    analyst = make_agent(
         name="AnalystWorker",
         role=AgentRole.ANALYST,
         model="llama2"
@@ -173,8 +173,8 @@ async def example_hierarchical_execution():
 
     # Add all agents
     orchestrator.add_agent(manager, manager_cap)
-    orchestrator.add_agent(researcher, researcher_cap)
-    orchestrator.add_agent(analyst, analyst_cap)
+    orchestrator.add_agent(researcher)
+    orchestrator.add_agent(analyst)
 
     # Create worker tasks
     worker_tasks = [
@@ -211,21 +211,21 @@ async def example_debate_mode():
     orchestrator = Orchestrator(name="Debate Orchestrator")
 
     # Create agents with different perspectives
-    critic1, critic1_cap = create_specialized_agent(
+    critic1, critic1_cap = make_agent(
         name="Optimist",
         role=AgentRole.CRITIC,
         model="llama2"
     )
     critic1.set_context("You are an optimistic critic who focuses on positive aspects and potential.")
 
-    critic2, critic2_cap = create_specialized_agent(
+    critic2, critic2_cap = make_agent(
         name="Realist",
         role=AgentRole.CRITIC,
         model="llama2"
     )
     critic2.set_context("You are a realistic critic who provides balanced, practical perspectives.")
 
-    critic3, critic3_cap = create_specialized_agent(
+    critic3, critic3_cap = make_agent(
         name="Skeptic",
         role=AgentRole.CRITIC,
         model="llama2"
@@ -292,14 +292,14 @@ async def example_custom_agent_with_tools():
     orchestrator = Orchestrator(execution_mode=ExecutionMode.PARALLEL)
 
     # Create specialized agents with tools
-    analyst1, analyst1_cap = create_specialized_agent(
+    analyst1, analyst1_cap = make_agent(
         name="MathAnalyst1",
         role=AgentRole.ANALYST,
         model="llama2"
     )
     analyst1.add_tool(calc_tool)
 
-    analyst2, analyst2_cap = create_specialized_agent(
+    analyst2, analyst2_cap = make_agent(
         name="MathAnalyst2",
         role=AgentRole.ANALYST,
         model="llama2"

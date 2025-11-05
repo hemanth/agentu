@@ -14,8 +14,7 @@ from .orchestrator import (
     ExecutionMode,
     Task,
     Message,
-    AgentCapability,
-    create_specialized_agent
+    make_agent
 )
 
 __version__ = "0.3.0"
@@ -44,6 +43,5 @@ __all__ = [
     "ExecutionMode",
     "Task",
     "Message",
-    "AgentCapability",
-    "create_specialized_agent",
+    "make_agent",
 ]
