@@ -1,38 +1,23 @@
 # AgentU
 
-A flexible Python framework for building AI agents with memory, tools, and MCP integration.
-
-## Installation
+A flexible Python framework for building AI agents with memory, tools, and orchestration.
 
 ```bash
 pip install agentu
 ```
 
-## Features
-
-- **Persistent Memory** - SQLite-backed long-term memory with full-text search
-- **Multi-Agent Orchestration** - Coordinate multiple specialized agents
-- **MCP Integration** - Connect to Model Context Protocol servers (HTTP & SSE)
-- **Built-in Search** - DuckDuckGo web search out of the box
-- **Custom Tools** - Easy-to-define tool system
-- **Flexible Auth** - Bearer tokens, API keys, custom headers
-
 ## Quick Start
 
-### Simple Agent
+### Basic Agent
 
 ```python
 import asyncio
 from agentu import Agent, Tool
 
-# Create agent
-agent = Agent(name="assistant", model="llama3")
-
-# Add a custom tool
 def calculator(x: float, y: float, op: str) -> float:
-    ops = {"+": x+y, "-": x-y, "*": x*y, "/": x/y}
-    return ops[op]
+    return {"+": x+y, "-": x-y, "*": x*y, "/": x/y}[op]
 
+agent = Agent("assistant", model="llama3")
 agent.add_tool(Tool(
     name="calc",
     description="Perform calculations",
@@ -40,74 +25,74 @@ agent.add_tool(Tool(
     parameters={"x": "float", "y": "float", "op": "str: +,-,*,/"}
 ))
 
-# Execute with natural language
 async def main():
+    # Natural language execution (requires Ollama)
     result = await agent.process_input("Calculate 15 times 7")
-    print(result)
-    # {'tool_used': 'calc', 'parameters': {'x': 15, 'y': 7, 'op': '*'}, 'result': 105}
+    print(result)  # {'tool_used': 'calc', 'result': 105, ...}
+
+    # Direct execution (no LLM)
+    result = await agent.execute_tool("calc", {"x": 10, "y": 5, "op": "+"})
+    print(result)  # 15
 
 asyncio.run(main())
 ```
 
-### Search Agent
+### Multi-Agent Orchestration
 
 ```python
-import asyncio
-from agentu import SearchAgent
+from agentu.orchestrator import Orchestrator, AgentRole, Task, make_agent
 
 async def main():
-    agent = SearchAgent(name="researcher", max_results=5)
-    results = await agent.search("latest AI developments")
-    print(results)
+    orchestrator = Orchestrator()
+
+    orchestrator.add_agents([
+        make_agent("Researcher", AgentRole.RESEARCHER),
+        make_agent("Analyst", AgentRole.ANALYST),
+        make_agent("DataEngineer", "data-engineer", skills=["etl", "sql"])  # Custom role
+    ])
+
+    results = await orchestrator.execute([
+        Task(description="Research AI trends", required_skills=["research"]),
+        Task(description="Analyze findings", required_skills=["analyze"])
+    ])
 
 asyncio.run(main())
 ```
 
-## Memory System
+**Execution Modes:** `SEQUENTIAL`, `PARALLEL`, `HIERARCHICAL`, `DEBATE`
 
-### Basic Usage
+**Predefined Roles:** `RESEARCHER`, `CODER`, `ANALYST`, `PLANNER`, `CRITIC`, `WRITER`, `COORDINATOR`
+
+## Features
+
+### Memory System
 
 ```python
 agent = Agent("smart_agent", memory_path="agent.db")
 
-# Store memories with importance scoring
+# Store and recall
 agent.remember("API endpoint: /v1/chat", memory_type="fact", importance=0.9)
-agent.remember("Fix bug in auth module", memory_type="task", importance=0.8)
+results = agent.recall(query="API", limit=5)
 
-# Recall by query or type
-results = agent.recall(query="API")
-tasks = agent.recall(memory_type="task", limit=5)
-
-# Get stats
-print(agent.get_memory_stats())
+# SQLite (default) or JSON storage
+agent = Agent(memory_path="agent.db", use_sqlite=True)
 ```
 
-### Storage Options
+**Memory types:** `conversation`, `fact`, `task`, `observation`
+
+### Web Search
 
 ```python
-# SQLite (default) - recommended for production
-agent = Agent(memory_path="agent.db", use_sqlite=True)
+from agentu import SearchAgent
 
-# JSON - simple file storage
-agent = Agent(memory_path="agent.json", use_sqlite=False)
+async def main():
+    agent = SearchAgent("researcher", max_results=5)
+    results = await agent.search("latest AI developments")
+
+asyncio.run(main())
 ```
 
-**SQLite Benefits:**
-- Indexed queries for fast searches
-- Full-text search (FTS5)
-- Better performance at scale
-- ACID compliance
-
-### Memory Types
-
-- `conversation` - Chat history
-- `fact` - Knowledge and information
-- `task` - To-dos and action items
-- `observation` - Events and logs
-
-## MCP (Model Context Protocol)
-
-### Single Server
+### MCP Integration
 
 ```python
 from agentu import Agent, MCPServerConfig, AuthConfig, TransportType
@@ -121,182 +106,15 @@ config = MCPServerConfig(
 
 agent = Agent()
 tools = agent.add_mcp_server(config)
-result = agent.execute_tool("tool_name", {"param": "value"})
+result = await agent.execute_tool("tool_name", {"param": "value"})
 ```
 
-### Multiple Servers (Config File)
-
-Create `mcp_config.json`:
-
-```json
-{
-  "mcp_servers": {
-    "server1": {
-      "type": "http",
-      "url": "https://api.example.com/mcp",
-      "auth": {"type": "bearer", "headers": {"Authorization": "Bearer token1"}}
-    },
-    "server2": {
-      "type": "sse",
-      "url": "https://sse.example.com/sse",
-      "auth": {"type": "bearer", "headers": {"Authorization": "Bearer token2"}}
-    }
-  }
-}
-```
-
-Load all servers:
-
+Load from config file:
 ```python
-agent = Agent()
-tools = agent.load_mcp_tools("mcp_config.json")
+agent.load_mcp_tools("mcp_config.json")
 ```
 
-### Authentication
-
-```python
-# Bearer token
-auth = AuthConfig.bearer_token("your_token")
-
-# API key
-auth = AuthConfig.api_key("key", header_name="X-API-Key")
-
-# Custom headers
-auth = AuthConfig(type="custom", headers={"Auth": "value"})
-```
-
-## Multi-Agent Orchestration
-
-Coordinate specialized agents to solve complex tasks with async/await.
-
-```python
-import asyncio
-from agentu.orchestrator import Orchestrator, AgentRole, Task, make_agent
-
-async def main():
-    orchestrator = Orchestrator()
-
-    # Use predefined roles or custom strings
-    orchestrator.add_agents([
-        make_agent("ResearchBot", AgentRole.RESEARCHER),
-        make_agent("AnalystBot", AgentRole.ANALYST),
-        make_agent("CustomBot", "data-engineer", skills=["etl", "sql", "spark"])
-    ])
-
-    # Define and execute tasks
-    tasks = [
-        Task(description="Research AI safety trends", required_skills=["research"]),
-        Task(description="Analyze findings", required_skills=["analyze"])
-    ]
-
-    results = await orchestrator.execute(tasks)
-
-asyncio.run(main())
-```
-
-**Execution Modes:** Sequential, Parallel, Hierarchical, Debate
-
-**Predefined Roles:** `RESEARCHER`, `CODER`, `ANALYST`, `PLANNER`, `CRITIC`, `WRITER`, `COORDINATOR`
-
-You can use predefined roles (`AgentRole.RESEARCHER`) or define custom roles as strings.
-
-See `examples/multi_agent_example.py` for detailed examples.
-
-## Advanced Usage
-
-<details>
-<summary><b>Custom Tools</b></summary>
-
-```python
-from agentu import Agent, Tool
-
-def fetch_data(source: str, filters: dict) -> dict:
-    # Your implementation
-    return {"data": [...]}
-
-tool = Tool(
-    name="data_fetcher",
-    description="Fetch data from various sources",
-    function=fetch_data,
-    parameters={
-        "source": "str: data source name",
-        "filters": "dict: filter criteria"
-    }
-)
-
-agent = Agent()
-agent.add_tool(tool)
-```
-
-</details>
-
-<details>
-<summary><b>Memory Management</b></summary>
-
-```python
-agent = Agent(memory_path="agent.db", short_term_size=20)
-
-# Store with metadata
-agent.remember(
-    "Database schema updated",
-    memory_type="observation",
-    metadata={"timestamp": "2024-01-15", "severity": "high"},
-    importance=0.7,
-    store_long_term=True
-)
-
-# Consolidate short-term to long-term
-agent.consolidate_memory(importance_threshold=0.6)
-
-# Clear short-term only
-agent.clear_short_term_memory()
-
-# Save manually
-agent.save_memory()
-
-# Get context for prompts
-context = agent.get_memory_context(max_entries=10)
-```
-
-</details>
-
-<details>
-<summary><b>Direct Memory Access</b></summary>
-
-```python
-from agentu import Memory
-
-memory = Memory(
-    short_term_size=15,
-    storage_path="custom.db",
-    use_sqlite=True,
-    auto_consolidate=True
-)
-
-# Store with metadata
-memory.remember(
-    content="Important data",
-    memory_type="fact",
-    metadata={"source": "api", "version": "2.0"},
-    importance=0.85
-)
-
-# Search
-results = memory.recall(query="data", limit=5)
-
-# Filter by type
-facts = memory.recall(memory_type="fact")
-
-# Stats
-stats = memory.stats()
-print(f"Total: {stats['total_memories']}")
-print(f"Short-term: {stats['short_term_size']}")
-print(f"Long-term: {stats['long_term_size']}")
-```
-
-</details>
-
-## API Reference
+## API
 
 ### Agent
 
@@ -307,59 +125,50 @@ Agent(
     temperature: float = 0.7,
     enable_memory: bool = True,
     memory_path: Optional[str] = None,
-    short_term_size: int = 10,
-    use_sqlite: bool = True,
     role: Optional[str] = None,
-    skills: Optional[List[str]] = None,
-    priority: int = 5
+    skills: Optional[List[str]] = None
 )
 ```
 
-**Main Methods:**
-- `await process_input(user_input: str)` - Execute agent with natural language input (returns dict with tool_used, result)
-- `await execute_tool(name: str, params: dict)` - Execute a specific tool directly
+**Execution:**
+- `await process_input(text)` - Natural language execution (requires Ollama)
+- `await execute_tool(name, params)` - Direct tool execution
 
-**Tool Management:**
-- `add_tool(tool: Tool)` - Add a custom tool
-- `add_mcp_server(config: MCPServerConfig)` - Connect to MCP server
-- `load_mcp_tools(config_path: str)` - Load multiple MCP servers
+**Tools:**
+- `add_tool(tool)` - Add custom tool
+- `add_mcp_server(config)` - Connect to MCP server
+- `load_mcp_tools(path)` - Load from config
 
 **Memory:**
-- `remember(content, memory_type, importance)` - Store memory
-- `recall(query, memory_type, limit)` - Retrieve memories
-- `get_memory_context(max_entries)` - Get formatted context
-- `consolidate_memory(threshold)` - Move important memories to long-term
+- `remember(content, memory_type, importance)`
+- `recall(query, memory_type, limit)`
+- `consolidate_memory(threshold)`
 
-### Memory
+### Orchestrator
 
 ```python
-Memory(
-    short_term_size: int = 10,
-    storage_path: Optional[str] = None,
-    use_sqlite: bool = True,
-    auto_consolidate: bool = True
-)
+Orchestrator(name: str = "Orchestrator", execution_mode: ExecutionMode = SEQUENTIAL)
 ```
 
 **Methods:**
-- `remember(content, memory_type, metadata, importance, store_long_term)`
-- `recall(query, memory_type, limit, include_short_term)`
-- `consolidate_to_long_term(importance_threshold)`
-- `get_context(max_entries)`
-- `stats()`
+- `add_agent(agent)` - Add single agent
+- `add_agents([agents])` - Add multiple agents
+- `await execute(tasks)` - Execute task list
+- `route_task(task)` - Get best agent for task
 
-### SearchAgent
+### Helper Functions
 
 ```python
-SearchAgent(
-    name: str = "search_agent",
-    model: str = "llama2",
-    max_results: int = 3
-)
+make_agent(name, role, model="llama2", skills=None, **kwargs) -> Agent
 ```
 
-**Methods:**
-- `search(query, max_results, region, safesearch)`
+Create agent with predefined or custom role.
+
+## Examples
+
+- `examples/simple_agent.py` - Basic agent execution
+- `examples/quickstart_orchestration.py` - Multi-agent demo
+- `examples/multi_agent_example.py` - Complete orchestration examples
 
 ## License
 
@@ -367,4 +176,4 @@ MIT
 
 ## Contributing
 
-Contributions welcome! Please open an issue or PR on [GitHub](https://github.com/hemanth/agentu).
+Contributions welcome at [github.com/hemanth/agentu](https://github.com/hemanth/agentu)
