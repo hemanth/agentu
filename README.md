@@ -166,10 +166,11 @@ from agentu.orchestrator import Orchestrator, AgentRole, Task, make_agent
 async def main():
     orchestrator = Orchestrator()
 
-    # Create and add agents
+    # Use predefined roles or custom strings
     orchestrator.add_agents([
         make_agent("ResearchBot", AgentRole.RESEARCHER),
-        make_agent("AnalystBot", AgentRole.ANALYST)
+        make_agent("AnalystBot", AgentRole.ANALYST),
+        make_agent("CustomBot", "data-engineer", skills=["etl", "sql", "spark"])
     ])
 
     # Define and execute tasks
@@ -185,7 +186,9 @@ asyncio.run(main())
 
 **Execution Modes:** Sequential, Parallel, Hierarchical, Debate
 
-**Agent Roles:** RESEARCHER, CODER, ANALYST, PLANNER, CRITIC, WRITER, COORDINATOR, CUSTOM
+**Predefined Roles:** `RESEARCHER`, `CODER`, `ANALYST`, `PLANNER`, `CRITIC`, `WRITER`, `COORDINATOR`
+
+You can use predefined roles (`AgentRole.RESEARCHER`) or define custom roles as strings.
 
 See `examples/multi_agent_example.py` for detailed examples.
 

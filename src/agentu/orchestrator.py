@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 # Enums and immutable data structures
 
-class AgentRole(Enum):
-    """Predefined agent roles with specific capabilities."""
+# Predefined agent roles (use these or define your own)
+class AgentRole:
+    """Predefined agent role constants. You can also use any custom string."""
     RESEARCHER = "researcher"
     CODER = "coder"
     ANALYST = "analyst"
@@ -25,7 +26,6 @@ class AgentRole(Enum):
     CRITIC = "critic"
     WRITER = "writer"
     COORDINATOR = "coordinator"
-    CUSTOM = "custom"
 
 
 class ExecutionMode(Enum):
@@ -61,7 +61,7 @@ class Message:
 @dataclass(frozen=True)
 class AgentCapability:
     """Immutable agent capability definition."""
-    role: AgentRole
+    role: str  # Agent role (use AgentRole constants or custom string)
     skills: Tuple[str, ...] = ()
     priority: int = 5
     description: str = ""
@@ -197,7 +197,7 @@ def create_stats(state: OrchestratorState) -> Dict[str, Any]:
         'execution_mode': state.execution_mode.value,
         'registered_agents': len(state.agents),
         'agents': list(state.agents.keys()),
-        'agent_roles': {name: cap.role.value for name, cap in state.capabilities.items()},
+        'agent_roles': {name: cap.role for name, cap in state.capabilities.items()},
         'tasks_completed': count_tasks_by_status(state.tasks, "completed"),
         'tasks_failed': count_tasks_by_status(state.tasks, "failed"),
         'total_tasks': len(state.tasks),
@@ -315,13 +315,13 @@ class Orchestrator:
         """Add an agent to the orchestrator."""
         # Create capability from agent attributes
         capability = AgentCapability(
-            role=AgentRole(agent.role) if agent.role else AgentRole.CUSTOM,
+            role=agent.role or "custom",
             skills=agent.skills,
             priority=agent.priority,
-            description=f"{agent.role or 'Custom'} agent: {agent.name}"
+            description=f"{agent.role or 'custom'} agent: {agent.name}"
         )
         self._state = self._state.with_agent(agent.name, agent, capability)
-        logger.info(f"Added agent '{agent.name}' with role {capability.role.value}")
+        logger.info(f"Added agent '{agent.name}' with role {capability.role}")
 
     def add_agents(self, agents: List[Agent]) -> None:
         """Add multiple agents to the orchestrator."""
@@ -533,14 +533,25 @@ class Orchestrator:
 
 def make_agent(
     name: str,
-    role: AgentRole,
+    role: str,
     model: str = "llama2",
     skills: Optional[List[str]] = None,
     **agent_kwargs
 ) -> Agent:
-    """Create specialized agent with role and skills."""
+    """Create specialized agent with role and skills.
 
-    # Define default skills
+    Args:
+        name: Agent name
+        role: Agent role (use AgentRole.* constants or any custom string)
+        model: Ollama model to use
+        skills: Custom skills (if None, uses defaults for predefined roles)
+        **agent_kwargs: Additional Agent constructor arguments
+
+    Returns:
+        Configured Agent instance
+    """
+
+    # Define default skills for predefined roles
     default_skills_map = {
         AgentRole.RESEARCHER: ["research", "search", "analyze", "gather information"],
         AgentRole.CODER: ["code", "programming", "debug", "implement", "refactor"],
@@ -553,7 +564,7 @@ def make_agent(
 
     agent_skills = skills or default_skills_map.get(role, [])
 
-    # Define context
+    # Define context for predefined roles
     role_contexts = {
         AgentRole.RESEARCHER: "You are a research specialist focused on gathering and analyzing information.",
         AgentRole.CODER: "You are a programming expert focused on writing and debugging code.",
@@ -568,7 +579,7 @@ def make_agent(
     new_agent = Agent(
         name=name,
         model=model,
-        role=role.value,
+        role=role,
         skills=agent_skills,
         **agent_kwargs
     )

@@ -374,7 +374,7 @@ class TestCreateSpecializedAgent:
 
         agent = make_agent(
             name="CustomAgent",
-            role=AgentRole.CUSTOM,
+            role="custom",
             model="llama2",
             skills=custom_skills,
             enable_memory=False
