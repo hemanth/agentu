@@ -8,6 +8,15 @@ from .mcp_transport import MCPServerConfig, AuthConfig, TransportType
 from .mcp_tool import MCPToolAdapter, MCPToolManager
 from .memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
 from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
+from .orchestrator import (
+    Orchestrator,
+    AgentRole,
+    ExecutionMode,
+    Task,
+    Message,
+    AgentCapability,
+    create_specialized_agent
+)
 
 __version__ = "0.3.0"
 __all__ = [
@@ -30,4 +39,11 @@ __all__ = [
     "JSONStorage",
     "SQLiteStorage",
     "create_storage",
+    "Orchestrator",
+    "AgentRole",
+    "ExecutionMode",
+    "Task",
+    "Message",
+    "AgentCapability",
+    "create_specialized_agent",
 ]

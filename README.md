@@ -11,6 +11,7 @@ pip install agentu
 ## Features
 
 - **Persistent Memory** - SQLite-backed long-term memory with full-text search
+- **Multi-Agent Orchestration** - Coordinate multiple specialized agents
 - **MCP Integration** - Connect to Model Context Protocol servers (HTTP & SSE)
 - **Built-in Search** - DuckDuckGo web search out of the box
 - **Custom Tools** - Easy-to-define tool system
@@ -153,6 +154,37 @@ auth = AuthConfig.api_key("key", header_name="X-API-Key")
 # Custom headers
 auth = AuthConfig(type="custom", headers={"Auth": "value"})
 ```
+
+## Multi-Agent Orchestration
+
+Coordinate specialized agents to solve complex tasks.
+
+```python
+from agentu.orchestrator import Orchestrator, AgentRole, Task, create_specialized_agent
+
+# Create orchestrator with agents
+orchestrator = Orchestrator()
+
+researcher, researcher_cap = create_specialized_agent("ResearchBot", AgentRole.RESEARCHER)
+analyst, analyst_cap = create_specialized_agent("AnalystBot", AgentRole.ANALYST)
+
+orchestrator.add_agent(researcher, researcher_cap)
+orchestrator.add_agent(analyst, analyst_cap)
+
+# Define and execute tasks
+tasks = [
+    Task(description="Research AI safety trends", required_skills=["research"]),
+    Task(description="Analyze findings", required_skills=["analyze"])
+]
+
+results = orchestrator.execute(tasks)
+```
+
+**Execution Modes:** Sequential, Parallel, Hierarchical, Debate
+
+**Agent Roles:** RESEARCHER, CODER, ANALYST, PLANNER, CRITIC, WRITER, COORDINATOR, CUSTOM
+
+See `examples/multi_agent_example.py` for detailed examples.
 
 ## Advanced Usage
 
