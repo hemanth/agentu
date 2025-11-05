@@ -323,6 +323,11 @@ class Orchestrator:
         self._state = self._state.with_agent(agent.name, agent, capability)
         logger.info(f"Added agent '{agent.name}' with role {capability.role.value}")
 
+    def add_agents(self, agents: List[Agent]) -> None:
+        """Add multiple agents to the orchestrator."""
+        for agent in agents:
+            self.add_agent(agent)
+
     def remove_agent(self, agent_name: str) -> None:
         """Remove an agent from the orchestrator."""
         self._state = self._state.without_agent(agent_name)

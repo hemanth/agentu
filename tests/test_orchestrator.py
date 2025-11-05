@@ -203,6 +203,17 @@ class TestOrchestrator:
         assert "Researcher" in basic_orchestrator.agent_capabilities
         assert basic_orchestrator.agent_capabilities["Researcher"].role == AgentRole.RESEARCHER
 
+    def test_add_agents(self, basic_orchestrator, sample_agents):
+        """Test adding multiple agents at once."""
+        researcher = sample_agents['researcher']
+        analyst = sample_agents['analyst']
+
+        basic_orchestrator.add_agents([researcher, analyst])
+
+        assert "Researcher" in basic_orchestrator.agents
+        assert "Analyst" in basic_orchestrator.agents
+        assert len(basic_orchestrator.agents) == 2
+
     def test_remove_agent(self, basic_orchestrator, sample_agents):
         """Test removing an agent."""
         researcher = sample_agents['researcher']
