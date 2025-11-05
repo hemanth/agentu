@@ -1,10 +1,10 @@
 """Multi-agent orchestration using functional programming principles."""
 
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional, Callable, Tuple, NamedTuple
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import reduce
 import json
 
@@ -205,10 +205,12 @@ def create_stats(state: OrchestratorState) -> Dict[str, Any]:
     }
 
 
-def execute_single_task(agent: Agent, task: Task) -> Dict[str, Any]:
-    """Execute a single task with an agent (impure - I/O operation)."""
+async def execute_single_task(agent: Agent, task: Task) -> Dict[str, Any]:
+    """Execute a single task with an agent (impure - async I/O operation)."""
     try:
-        result = agent.process_input(task.description)
+        # Run blocking agent call in executor
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, agent.process_input, task.description)
         return {
             'task': task.description,
             'agent': task.assigned_agent,
@@ -338,19 +340,19 @@ class Orchestrator:
         """Route task to best agent (pure delegation)."""
         return find_best_agent(self._state.capabilities, task)
 
-    def execute(self, tasks: List[Task], mode: Optional[ExecutionMode] = None) -> List[Dict[str, Any]]:
-        """Execute tasks using specified mode."""
+    async def execute(self, tasks: List[Task], mode: Optional[ExecutionMode] = None) -> List[Dict[str, Any]]:
+        """Execute tasks using specified mode (async)."""
         exec_mode = mode or self.execution_mode
 
         if exec_mode == ExecutionMode.SEQUENTIAL:
-            return self.execute_task_sequential(tasks)
+            return await self.execute_task_sequential(tasks)
         elif exec_mode == ExecutionMode.PARALLEL:
-            return self.execute_task_parallel(tasks)
+            return await self.execute_task_parallel(tasks)
         else:
             raise ValueError(f"Mode {exec_mode} requires specific method call")
 
-    def execute_task_sequential(self, tasks: List[Task]) -> List[Dict[str, Any]]:
-        """Execute tasks sequentially (functional pipeline)."""
+    async def execute_task_sequential(self, tasks: List[Task]) -> List[Dict[str, Any]]:
+        """Execute tasks sequentially (async functional pipeline)."""
         results = []
 
         for task in tasks:
@@ -367,9 +369,9 @@ class Orchestrator:
                 self._state = self._state.with_task(assigned_task.as_failed("No suitable agent"))
                 continue
 
-            # Impure: Execute task
+            # Impure: Execute task (async)
             agent = self._state.agents[assigned_task.assigned_agent]
-            result = execute_single_task(agent, assigned_task)
+            result = await execute_single_task(agent, assigned_task)
 
             # Update state
             if result['status'] == 'completed':
@@ -387,16 +389,16 @@ class Orchestrator:
 
         return results
 
-    def execute_task_parallel(self, tasks: List[Task], max_workers: int = 5) -> List[Dict[str, Any]]:
-        """Execute tasks in parallel (functional + concurrent)."""
+    async def execute_task_parallel(self, tasks: List[Task], max_workers: int = 5) -> List[Dict[str, Any]]:
+        """Execute tasks in parallel (async functional + concurrent)."""
         # Pure: Assign all agents
         assigned_tasks = [
             assign_task_to_agent(task, self._state.capabilities)
             for task in tasks
         ]
 
-        def execute_task_wrapper(task: Task) -> Tuple[Task, Dict[str, Any]]:
-            """Wrapper to return both task and result."""
+        async def execute_task_wrapper(task: Task) -> Tuple[Task, Dict[str, Any]]:
+            """Async wrapper to return both task and result."""
             if not task.assigned_agent:
                 result = {
                     'task': task.description,
@@ -406,52 +408,51 @@ class Orchestrator:
                 return task, result
 
             agent = self._state.agents[task.assigned_agent]
-            result = execute_single_task(agent, task)
+            result = await execute_single_task(agent, task)
             return task, result
 
+        # Execute all tasks concurrently
+        task_coroutines = [execute_task_wrapper(task) for task in assigned_tasks]
+        completed = await asyncio.gather(*task_coroutines, return_exceptions=True)
+
         results = []
+        for item in completed:
+            if isinstance(item, Exception):
+                logger.error(f"Task execution failed: {str(item)}")
+                results.append({
+                    'task': 'Unknown',
+                    'status': 'failed',
+                    'error': str(item)
+                })
+            else:
+                task, result = item
+                if result['status'] == 'completed':
+                    completed_task = task.with_result(result['result'])
+                    self._state = self._state.with_task(completed_task)
+                else:
+                    failed_task = task.as_failed(result.get('error', 'Unknown'))
+                    self._state = self._state.with_task(failed_task)
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_task = {
-                executor.submit(execute_task_wrapper, task): task
-                for task in assigned_tasks
-            }
-
-            for future in as_completed(future_to_task):
-                try:
-                    task, result = future.result()
-
-                    if result['status'] == 'completed':
-                        completed_task = task.with_result(result['result'])
-                        self._state = self._state.with_task(completed_task)
-                    else:
-                        failed_task = task.as_failed(result.get('error', 'Unknown'))
-                        self._state = self._state.with_task(failed_task)
-
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"Task execution failed: {str(e)}")
-                    results.append({
-                        'task': 'Unknown',
-                        'status': 'failed',
-                        'error': str(e)
-                    })
+                results.append(result)
 
         return results
 
-    def execute_hierarchical(self, manager_agent: str, worker_tasks: List[Task]) -> Dict[str, Any]:
-        """Execute hierarchical workflow."""
+    async def execute_hierarchical(self, manager_agent: str, worker_tasks: List[Task]) -> Dict[str, Any]:
+        """Execute hierarchical workflow (async)."""
         if manager_agent not in self._state.agents:
             raise ValueError(f"Manager agent '{manager_agent}' not found")
 
         # Workers execute in parallel
-        worker_results = self.execute_task_parallel(worker_tasks)
+        worker_results = await self.execute_task_parallel(worker_tasks)
 
         # Manager synthesizes (pure summary + impure execution)
         summary = format_hierarchical_summary(worker_results)
         manager = self._state.agents[manager_agent]
         manager_prompt = f"Analyze and summarize the following results:\n\n{summary}"
-        manager_result = manager.process_input(manager_prompt)
+
+        # Run manager in executor
+        loop = asyncio.get_event_loop()
+        manager_result = await loop.run_in_executor(None, manager.process_input, manager_prompt)
 
         return {
             'mode': 'hierarchical',
@@ -460,12 +461,13 @@ class Orchestrator:
             'manager_summary': manager_result
         }
 
-    def execute_debate(self, topic: str, agents: List[str], rounds: int = 3) -> Dict[str, Any]:
-        """Execute debate among agents."""
+    async def execute_debate(self, topic: str, agents: List[str], rounds: int = 3) -> Dict[str, Any]:
+        """Execute debate among agents (async)."""
         if not all(a in self._state.agents for a in agents):
             raise ValueError("One or more agents not found")
 
         debate_history = []
+        loop = asyncio.get_event_loop()
 
         for round_num in range(rounds):
             round_responses = []
@@ -477,8 +479,8 @@ class Orchestrator:
                 context = format_debate_context(topic, debate_history)
                 prompt = f"{context}Provide your perspective on this topic:"
 
-                # Impure: Get response
-                response = agent.process_input(prompt)
+                # Impure: Get response (async)
+                response = await loop.run_in_executor(None, agent.process_input, prompt)
 
                 round_responses.append({
                     'round': round_num + 1,
@@ -497,7 +499,7 @@ class Orchestrator:
                 summary += f"\nRound {resp['round']} - {resp['agent']}:\n{resp['response']}\n"
 
         consensus_prompt = f"{summary}\n\nProvide a consensus summary integrating all perspectives:"
-        consensus = synthesizer.process_input(consensus_prompt)
+        consensus = await loop.run_in_executor(None, synthesizer.process_input, consensus_prompt)
 
         return {
             'mode': 'debate',
