@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-01-09
+
+### Added
+- **Auto-detection of Ollama models** via `/api/tags` endpoint
+- `get_ollama_models()` helper function to fetch available models
+- `get_default_model()` helper function to select best available model
+- Comprehensive tests for dynamic model detection (7 new tests)
+
+### Changed
+- Agent default model now auto-detects from Ollama instead of hardcoding
+- Default fallback model changed from `llama2` to `qwen3:latest`
+- `SearchAgent` now uses auto-detection instead of hardcoded model
+- Agent `model` parameter now defaults to `None` (auto-detect)
+- Updated README to highlight auto-detection feature
+- All test fixtures updated to use `qwen3:latest`
+
+### Fixed
+- Agent initialization now properly detects available models from Ollama
+- Graceful fallback to `qwen3:latest` when Ollama is unreachable
+
 ## [1.0.0] - 2025-01-09
 
 ### Added
