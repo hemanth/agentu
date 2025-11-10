@@ -2,7 +2,7 @@ import requests
 import json
 import asyncio
 import aiohttp
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Union
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -11,6 +11,7 @@ from .tools import Tool
 from .mcp_config import load_mcp_servers
 from .mcp_tool import MCPToolManager
 from .memory import Memory
+from .workflow import Step
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,13 +22,13 @@ class Agent:
                  mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
                  enable_memory: bool = True, memory_path: Optional[str] = None,
                  short_term_size: int = 10, use_sqlite: bool = True,
-                 role: Optional[str] = None, skills: Optional[List[str]] = None,
-                 priority: int = 5):
+                 priority: int = 5, api_base: str = "http://localhost:11434/v1",
+                 api_key: Optional[str] = None):
         """Initialize an Agent.
 
         Args:
             name: Name of the agent
-            model: Ollama model to use (default: llama2)
+            model: Model name to use (default: llama2)
             temperature: Temperature for model generation (default: 0.7)
             mcp_config_path: Optional path to MCP configuration file
             load_mcp_tools: Whether to automatically load tools from MCP servers (default: False)
@@ -35,13 +36,15 @@ class Agent:
             memory_path: Path for persistent memory storage (default: None)
             short_term_size: Size of short-term memory buffer (default: 10)
             use_sqlite: If True, use SQLite database for memory; otherwise use JSON (default: True)
-            role: Agent role for orchestration (optional)
-            skills: List of agent skills for task matching (optional)
             priority: Agent priority for task assignment (default: 5)
+            api_base: Base URL for OpenAI-compatible API (default: http://localhost:11434/v1 for Ollama)
+            api_key: Optional API key for authentication
         """
         self.name = name
         self.model = model
         self.temperature = temperature
+        self.api_base = api_base.rstrip('/')
+        self.api_key = api_key
         self.tools: List[Tool] = []
         self.context = ""
         self.conversation_history = []
@@ -56,80 +59,141 @@ class Agent:
         ) if enable_memory else None
 
         # Orchestration attributes
-        self.role = role
-        self.skills = tuple(skills) if skills else ()
         self.priority = priority
 
         # Load MCP tools if requested
-        if load_mcp_tools:
-            self.load_mcp_tools(mcp_config_path)
+        if load_mcp_tools and mcp_config_path:
+            self.with_mcp([mcp_config_path])
         
-    def add_tool(self, tool: Tool) -> None:
-        """Add a tool to the agent's toolkit."""
-        self.tools.append(tool)
-        logger.info(f"Added tool: {tool.name} to agent {self.name}")
+    def _add_tool_internal(self, tool: Union[Tool, Callable]) -> None:
+        """Internal method to add a single tool."""
+        if isinstance(tool, Tool):
+            self.tools.append(tool)
+            logger.info(f"Added tool: {tool.name} to agent {self.name}")
+        elif callable(tool):
+            tool_obj = Tool(tool)
+            self.tools.append(tool_obj)
+            logger.info(f"Added tool: {tool_obj.name} to agent {self.name}")
+        else:
+            raise TypeError(f"Expected Tool or callable, got {type(tool)}")
 
-    def load_mcp_tools(self, config_path: Optional[str] = None) -> List[Tool]:
-        """Load tools from MCP servers defined in configuration.
-
-        Args:
-            config_path: Optional path to MCP config file. If None, uses default location.
-
-        Returns:
-            List of loaded Tool objects from MCP servers
-        """
-        try:
-            # Load MCP server configurations
-            server_configs = load_mcp_servers(config_path)
-
-            if not server_configs:
-                logger.warning("No MCP servers found in configuration")
-                return []
-
-            # Add each server to the manager
-            for server_name, server_config in server_configs.items():
-                self.mcp_manager.add_server(server_config)
-
-            # Load all tools from all servers
-            mcp_tools = self.mcp_manager.load_all_tools()
-
-            # Add to agent's tools
-            for tool in mcp_tools:
-                self.tools.append(tool)
-
-            logger.info(f"Loaded {len(mcp_tools)} tools from {len(server_configs)} MCP server(s)")
-            return mcp_tools
-
-        except Exception as e:
-            logger.error(f"Error loading MCP tools: {str(e)}")
-            raise
-
-    def add_mcp_server(self, server_config) -> List[Tool]:
-        """Add a single MCP server and load its tools.
+    def with_tools(self, tools: List[Union[Tool, Callable]]) -> 'Agent':
+        """Add tools and return self for chaining.
 
         Args:
-            server_config: MCPServerConfig object
+            tools: List of Tool objects or callable functions (auto-wrapped)
 
         Returns:
-            List of loaded Tool objects from the MCP server
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("MyAgent").with_tools([my_func])  # Single tool
+            >>> agent = Agent("MyAgent").with_tools([func1, func2])  # Multiple tools
         """
-        try:
-            adapter = self.mcp_manager.add_server(server_config)
-            tools = adapter.load_tools()
+        for tool in tools:
+            self._add_tool_internal(tool)
+        return self
 
-            for tool in tools:
-                self.tools.append(tool)
+    def with_mcp(self, servers: List[Union[str, Dict[str, Any]]]) -> 'Agent':
+        """Connect to MCP servers and load their tools (chainable).
 
-            logger.info(f"Added {len(tools)} tools from MCP server: {server_config.name}")
-            return tools
+        Args:
+            servers: List of MCP server configurations. Each item can be:
+                - String URL: "http://localhost:3000"
+                - Dict with url and headers: {"url": "...", "headers": {...}}
+                - Config file path: "~/.agentu/mcp_config.json"
 
-        except Exception as e:
-            logger.error(f"Error adding MCP server {server_config.name}: {str(e)}")
-            raise
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("bot").with_mcp([
+            ...     "http://localhost:3000",
+            ...     {"url": "https://api.com/mcp", "headers": {"Auth": "Bearer xyz"}}
+            ... ])
+        """
+        from .mcp_config import load_mcp_servers
+        from .mcp_transport import MCPServerConfig
+
+        for server in servers:
+            try:
+                # Handle config file path
+                if isinstance(server, str) and server.endswith('.json'):
+                    server_configs = load_mcp_servers(server)
+                    for server_name, server_config in server_configs.items():
+                        adapter = self.mcp_manager.add_server(server_config)
+                        tools = adapter.load_tools()
+                        for tool in tools:
+                            self._add_tool_internal(tool)
+                        logger.info(f"Loaded {len(tools)} tools from MCP server: {server_name}")
+
+                # Handle URL string
+                elif isinstance(server, str):
+                    from .mcp_transport import TransportType
+                    config = MCPServerConfig(
+                        name=f"mcp_{len(self.mcp_manager.adapters)}",
+                        transport_type=TransportType.HTTP,
+                        url=server
+                    )
+                    adapter = self.mcp_manager.add_server(config)
+                    tools = adapter.load_tools()
+                    for tool in tools:
+                        self._add_tool_internal(tool)
+                    logger.info(f"Loaded {len(tools)} tools from MCP server: {server}")
+
+                # Handle dict with url and headers
+                elif isinstance(server, dict):
+                    from .mcp_transport import TransportType, AuthConfig
+                    url = server.get('url')
+                    if not url:
+                        raise ValueError("MCP server dict must contain 'url' key")
+
+                    auth = None
+                    if 'headers' in server:
+                        auth = AuthConfig(
+                            type="custom",
+                            headers=server.get('headers', {})
+                        )
+
+                    config = MCPServerConfig(
+                        name=server.get('name', f"mcp_{len(self.mcp_manager.adapters)}"),
+                        transport_type=TransportType.HTTP,
+                        url=url,
+                        auth=auth
+                    )
+                    adapter = self.mcp_manager.add_server(config)
+                    tools = adapter.load_tools()
+                    for tool in tools:
+                        self._add_tool_internal(tool)
+                    logger.info(f"Loaded {len(tools)} tools from MCP server: {url}")
+
+                else:
+                    raise TypeError(f"Invalid MCP server type: {type(server)}")
+
+            except Exception as e:
+                logger.error(f"Error connecting to MCP server {server}: {str(e)}")
+                raise
+
+        return self
 
     def close_mcp_connections(self):
         """Close all MCP server connections."""
         self.mcp_manager.close_all()
+
+    def __call__(self, task: Union[str, Callable]) -> Step:
+        """Make agent callable to create workflow steps.
+
+        Args:
+            task: Task string or lambda function
+
+        Returns:
+            Step instance for workflow composition
+
+        Example:
+            >>> workflow = researcher("Find trends") >> analyst("Analyze")
+            >>> result = await workflow.run()
+        """
+        return Step(self, task)
 
     def remember(self, content: str, memory_type: str = 'conversation',
                 metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
@@ -235,37 +299,42 @@ class Agent:
             tools_str += f"Parameters: {json.dumps(tool.parameters, indent=2)}\n\n"
         return tools_str
 
-    async def _call_ollama(self, prompt: str) -> str:
-        """Make an async API call to Ollama."""
+    async def _call_llm(self, prompt: str) -> str:
+        """Make an async API call to OpenAI-compatible endpoint."""
         try:
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    "http://localhost:11434/api/generate",
+                    f"{self.api_base}/chat/completions",
                     json={
                         "model": self.model,
-                        "prompt": prompt,
+                        "messages": [{"role": "user", "content": prompt}],
                         "temperature": self.temperature,
                         "stream": False
                     },
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
                     response.raise_for_status()
                     response_json = await response.json()
 
                     if "error" in response_json:
-                        logger.error(f"Ollama API error: {response_json['error']}")
+                        logger.error(f"API error: {response_json['error']}")
                         raise Exception(response_json['error'])
 
-                    full_response = response_json.get("response", "")
+                    full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
 
                     if not full_response:
-                        logger.error("Empty response from Ollama")
-                        raise Exception("Empty response from Ollama")
+                        logger.error("Empty response from API")
+                        raise Exception("Empty response from API")
 
                     return full_response
 
         except aiohttp.ClientError as e:
-            logger.error(f"Error calling Ollama: {str(e)}")
+            logger.error(f"Error calling LLM API: {str(e)}")
             raise
 
     async def evaluate_tool_use(self, user_input: str) -> Dict[str, Any]:
@@ -304,18 +373,26 @@ Example response for calculator:
 }}"""
 
         try:
-            response = await self._call_ollama(prompt)
+            response = await self._call_llm(prompt)
             return json.loads(response)
         except json.JSONDecodeError as e:
-            logger.error(f"Error parsing Ollama response: {str(e)}")
+            logger.error(f"Error parsing LLM response: {str(e)}")
             return {
                 "selected_tool": None,
                 "parameters": {},
                 "reasoning": "Error parsing response"
             }
 
-    async def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Any:
-        """Execute a specific tool with given parameters (async)."""
+    async def call(self, tool_name: str, parameters: Dict[str, Any]) -> Any:
+        """Call a specific tool with given parameters.
+
+        Args:
+            tool_name: Name of the tool to call
+            parameters: Parameters to pass to the tool
+
+        Returns:
+            Tool execution result
+        """
         for tool in self.tools:
             if tool.name == tool_name:
                 try:
@@ -325,12 +402,19 @@ Example response for calculator:
                         return await result
                     return result
                 except Exception as e:
-                    logger.error(f"Error executing tool {tool_name}: {str(e)}")
+                    logger.error(f"Error calling tool {tool_name}: {str(e)}")
                     raise
         raise ValueError(f"Tool {tool_name} not found")
 
-    async def process_input(self, user_input: str) -> Dict[str, Any]:
-        """Process user input and execute appropriate tool (async)."""
+    async def infer(self, user_input: str) -> Dict[str, Any]:
+        """Infer tool and parameters from natural language input.
+
+        Args:
+            user_input: Natural language query
+
+        Returns:
+            Dict with tool_used, parameters, reasoning, and result
+        """
         # Store user input in memory
         if self.memory_enabled:
             self.memory.remember(
@@ -345,7 +429,7 @@ Example response for calculator:
         if not evaluation["selected_tool"]:
             return {"error": "No appropriate tool found"}
 
-        result = await self.execute_tool(
+        result = await self.call(
             evaluation["selected_tool"],
             evaluation["parameters"]
         )

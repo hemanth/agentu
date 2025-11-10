@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentu"
-version = "0.3.0"
+version = "1.0.0"
 description = "A flexible Python package for creating AI agents with customizable tools"
 readme = "README.md"
 authors = [
@@ -21,11 +21,14 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
 ]
-keywords = ["ai", "agents", "ollama", "tools"]
+keywords = ["ai", "agents", "openai", "llm", "tools"]
 dependencies = [
     "requests>=2.25.1",
     "aiohttp>=3.8.0",
     "duckduckgo-search>=4.1.1",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "pydantic>=2.0.0",
 ]
 requires-python = ">=3.7"
 

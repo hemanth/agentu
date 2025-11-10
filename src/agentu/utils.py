@@ -2,7 +2,7 @@ from typing import Dict, Any
 import json
 
 def validate_json_response(response: str) -> Dict[str, Any]:
-    """Validate and parse JSON response from Ollama."""
+    """Validate and parse JSON response from LLM."""
     try:
         data = json.loads(response)
         required_keys = {"selected_tool", "parameters", "reasoning"}

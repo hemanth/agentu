@@ -4,12 +4,10 @@ import pytest
 from agentu import Agent, Tool
 from agentu.orchestrator import (
     Orchestrator,
-    AgentRole,
     ExecutionMode,
     Task,
     AgentCapability,
-    Message,
-    make_agent
+    Message
 )
 
 
@@ -22,18 +20,17 @@ def basic_orchestrator():
 @pytest.fixture
 def sample_agents():
     """Create sample agents for testing."""
-    researcher = make_agent(
+    researcher = Agent(
         name="Researcher",
-        role=AgentRole.RESEARCHER,
         model="llama2",
         enable_memory=False
     )
 
-    analyst = make_agent(
+    analyst = Agent(
         name="Analyst",
-        role=AgentRole.ANALYST,
         model="llama2",
-        enable_memory=False
+        enable_memory=False,
+        priority=6  # Higher priority for testing routing
     )
 
     return {
@@ -48,56 +45,12 @@ class TestAgentCapability:
     def test_capability_creation(self):
         """Test creating agent capabilities."""
         cap = AgentCapability(
-            role=AgentRole.RESEARCHER,
-            skills=["research", "search", "analyze"],
             priority=7,
             description="Research specialist"
         )
 
-        assert cap.role == AgentRole.RESEARCHER
-        assert len(cap.skills) == 3
         assert cap.priority == 7
-        assert "research" in cap.skills
-
-    def test_matches_task_perfect_match(self):
-        """Test task matching with perfect match."""
-        cap = AgentCapability(
-            role=AgentRole.RESEARCHER,
-            skills=["research", "search", "analyze"]
-        )
-
-        score = cap.matches_task(["research", "search"])
-        assert score == 1.0  # 2/2 = 1.0
-
-    def test_matches_task_partial_match(self):
-        """Test task matching with partial match."""
-        cap = AgentCapability(
-            role=AgentRole.RESEARCHER,
-            skills=["research", "search", "analyze"]
-        )
-
-        score = cap.matches_task(["research", "coding"])
-        assert score == 0.5  # 1/2 = 0.5
-
-    def test_matches_task_no_match(self):
-        """Test task matching with no match."""
-        cap = AgentCapability(
-            role=AgentRole.RESEARCHER,
-            skills=["research", "search", "analyze"]
-        )
-
-        score = cap.matches_task(["coding", "debugging"])
-        assert score == 0.0  # 0/2 = 0.0
-
-    def test_matches_task_empty_requirements(self):
-        """Test task matching with empty requirements."""
-        cap = AgentCapability(
-            role=AgentRole.RESEARCHER,
-            skills=["research", "search"]
-        )
-
-        score = cap.matches_task([])
-        assert score == 0.5  # Default for no requirements
+        assert cap.description == "Research specialist"
 
 
 class TestMessage:
@@ -151,12 +104,10 @@ class TestTask:
         """Test creating a task."""
         task = Task(
             description="Analyze data",
-            required_skills=["analyze", "statistics"],
             metadata={"priority": "high"}
         )
 
         assert task.description == "Analyze data"
-        assert len(task.required_skills) == 2
         assert task.status == "pending"
         assert task.assigned_agent is None
         assert task.metadata["priority"] == "high"
@@ -193,22 +144,22 @@ class TestOrchestrator:
         assert len(orch.agents) == 0
         assert len(orch.message_queue) == 0
 
-    def test_add_agent(self, basic_orchestrator, sample_agents):
-        """Test adding an agent."""
+    def test_with_agents_single(self, basic_orchestrator, sample_agents):
+        """Test adding a single agent."""
         researcher = sample_agents['researcher']
 
-        basic_orchestrator.add_agent(researcher)
+        basic_orchestrator.with_agents([researcher])
 
         assert "Researcher" in basic_orchestrator.agents
         assert "Researcher" in basic_orchestrator.agent_capabilities
-        assert basic_orchestrator.agent_capabilities["Researcher"].role == AgentRole.RESEARCHER
+        assert basic_orchestrator.agent_capabilities["Researcher"].priority == 5
 
-    def test_add_agents(self, basic_orchestrator, sample_agents):
+    def test_with_agents_multiple(self, basic_orchestrator, sample_agents):
         """Test adding multiple agents at once."""
         researcher = sample_agents['researcher']
         analyst = sample_agents['analyst']
 
-        basic_orchestrator.add_agents([researcher, analyst])
+        basic_orchestrator.with_agents([researcher, analyst])
 
         assert "Researcher" in basic_orchestrator.agents
         assert "Analyst" in basic_orchestrator.agents
@@ -218,7 +169,7 @@ class TestOrchestrator:
         """Test removing an agent."""
         researcher = sample_agents['researcher']
 
-        basic_orchestrator.add_agent(researcher)
+        basic_orchestrator.with_agents([researcher])
         assert "Researcher" in basic_orchestrator.agents
 
         basic_orchestrator.remove_agent("Researcher")
@@ -274,26 +225,21 @@ class TestOrchestrator:
         researcher = sample_agents['researcher']
         analyst = sample_agents['analyst']
 
-        basic_orchestrator.add_agent(researcher)
-        basic_orchestrator.add_agent(analyst)
+        basic_orchestrator.with_agents([researcher])
+        basic_orchestrator.with_agents([analyst])
 
-        # Task requiring research skills
-        research_task = Task(
+        # Task without assigned agent - uses round-robin (first agent)
+        task = Task(description="Analyze data")
+        agent_name = basic_orchestrator.route_task(task)
+        assert agent_name == "Researcher"  # First agent in round-robin
+
+        # Task with pre-assigned agent
+        assigned_task = Task(
             description="Research AI trends",
-            required_skills=["research", "search"]
+            assigned_agent="Researcher"
         )
-
-        agent_name = basic_orchestrator.route_task(research_task)
+        agent_name = basic_orchestrator.route_task(assigned_task)
         assert agent_name == "Researcher"
-
-        # Task requiring analysis skills
-        analysis_task = Task(
-            description="Analyze data",
-            required_skills=["analyze", "statistics"]
-        )
-
-        agent_name = basic_orchestrator.route_task(analysis_task)
-        assert agent_name == "Analyst"
 
     def test_route_task_no_agents(self, basic_orchestrator):
         """Test routing when no agents are registered."""
@@ -307,8 +253,8 @@ class TestOrchestrator:
         researcher = sample_agents['researcher']
         analyst = sample_agents['analyst']
 
-        basic_orchestrator.add_agent(researcher)
-        basic_orchestrator.add_agent(analyst)
+        basic_orchestrator.with_agents([researcher])
+        basic_orchestrator.with_agents([analyst])
 
         stats = basic_orchestrator.get_stats()
 
@@ -337,64 +283,6 @@ class TestOrchestrator:
         assert len(basic_orchestrator.task_history) == 0
 
 
-class TestCreateSpecializedAgent:
-    """Test make_agent helper function."""
-
-    def test_create_researcher_agent(self):
-        """Test creating a researcher agent."""
-        agent = make_agent(
-            name="TestResearcher",
-            role=AgentRole.RESEARCHER,
-            model="llama2",
-            enable_memory=False
-        )
-
-        assert agent.name == "TestResearcher"
-        assert agent.model == "llama2"
-        assert agent.role == "researcher"
-        assert "research" in agent.skills
-        assert "search" in agent.skills
-
-    def test_create_coder_agent(self):
-        """Test creating a coder agent."""
-        agent = make_agent(
-            name="TestCoder",
-            role=AgentRole.CODER,
-            model="llama2",
-            enable_memory=False
-        )
-
-        assert agent.role == "coder"
-        assert "code" in agent.skills
-        assert "programming" in agent.skills
-
-    def test_create_custom_skills(self):
-        """Test creating agent with custom skills."""
-        custom_skills = ["skill1", "skill2", "skill3"]
-
-        agent = make_agent(
-            name="CustomAgent",
-            role="custom",
-            model="llama2",
-            skills=custom_skills,
-            enable_memory=False
-        )
-
-        # Skills are stored as tuples (immutable)
-        assert agent.skills == tuple(custom_skills)
-
-    def test_agent_context_set(self):
-        """Test that agent context is set based on role."""
-        agent = make_agent(
-            name="TestAgent",
-            role=AgentRole.RESEARCHER,
-            enable_memory=False
-        )
-
-        assert agent.context != ""
-        assert "research" in agent.context.lower()
-
-
 class TestExecutionModes:
     """Test different execution modes."""
 
@@ -419,37 +307,31 @@ class TestExecutionModes:
 class TestIntegration:
     """Integration tests requiring actual agent execution."""
 
-    @pytest.mark.skip(reason="Requires running Ollama instance")
+    @pytest.mark.skip(reason="Requires OpenAI-compatible inference endpoint")
     def test_full_orchestration_workflow(self):
         """Test complete orchestration workflow."""
         # Create orchestrator
         orch = Orchestrator(execution_mode=ExecutionMode.SEQUENTIAL)
 
         # Create agents
-        researcher = make_agent(
+        researcher = Agent(
             name="Researcher",
-            role=AgentRole.RESEARCHER
+            model="llama2"
         )
 
-        analyst = make_agent(
+        analyst = Agent(
             name="Analyst",
-            role=AgentRole.ANALYST
+            model="llama2"
         )
 
         # Register agents
-        orch.register_agent(researcher)
-        orch.register_agent(analyst)
+        orch.with_agents([researcher])
+        orch.with_agents([analyst])
 
         # Create tasks
         tasks = [
-            Task(
-                description="Research Python best practices",
-                required_skills=["research", "search"]
-            ),
-            Task(
-                description="Analyze the research findings",
-                required_skills=["analyze", "evaluate"]
-            )
+            Task(description="Research Python best practices"),
+            Task(description="Analyze the research findings")
         ]
 
         # Execute
@@ -459,7 +341,7 @@ class TestIntegration:
         assert len(results) == 2
         assert all(r['status'] in ['completed', 'failed'] for r in results)
 
-    @pytest.mark.skip(reason="Requires running Ollama instance")
+    @pytest.mark.skip(reason="Requires OpenAI-compatible inference endpoint")
     def test_parallel_execution_integration(self):
         """Test parallel execution with real agents."""
         orch = Orchestrator(execution_mode=ExecutionMode.PARALLEL)
@@ -467,16 +349,16 @@ class TestIntegration:
         # Create multiple coder agents
         agents = []
         for i in range(3):
-            agent, cap = make_agent(
+            agent = Agent(
                 name=f"Coder{i}",
-                role=AgentRole.CODER
+                model="llama2"
             )
-            agents.append((agent, cap))
-            orch.register_agent(agent, cap)
+            agents.append(agent)
+            orch.with_agents([agent])
 
         # Create parallel tasks
         tasks = [
-            Task(description=f"Write a function to {task}", required_skills=["code"])
+            Task(description=f"Write a function to {task}")
             for task in ["sort array", "reverse string", "find prime numbers"]
         ]
 

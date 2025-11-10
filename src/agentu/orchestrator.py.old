@@ -16,18 +16,6 @@ logger = logging.getLogger(__name__)
 
 # Enums and immutable data structures
 
-# Predefined agent roles (use these or define your own)
-class AgentRole:
-    """Predefined agent role constants. You can also use any custom string."""
-    RESEARCHER = "researcher"
-    CODER = "coder"
-    ANALYST = "analyst"
-    PLANNER = "planner"
-    CRITIC = "critic"
-    WRITER = "writer"
-    COORDINATOR = "coordinator"
-
-
 class ExecutionMode(Enum):
     """Execution modes for multi-agent tasks."""
     SEQUENTIAL = "sequential"
@@ -61,34 +49,20 @@ class Message:
 @dataclass(frozen=True)
 class AgentCapability:
     """Immutable agent capability definition."""
-    role: str  # Agent role (use AgentRole constants or custom string)
-    skills: Tuple[str, ...] = ()
     priority: int = 5
     description: str = ""
-
-    def matches_task(self, task_requirements: List[str]) -> float:
-        """Calculate task match score (pure function).
-
-        Returns:
-            Score from 0.0 to 1.0
-        """
-        if not task_requirements:
-            return 0.5
-
-        skills_lower = tuple(s.lower() for s in self.skills)
-        matches = sum(1 for req in task_requirements if req.lower() in skills_lower)
-        return matches / len(task_requirements)
 
 
 @dataclass(frozen=True)
 class Task:
     """Immutable task definition."""
     description: str
-    required_skills: Tuple[str, ...] = ()
     assigned_agent: Optional[str] = None
     result: Optional[Any] = None
     status: str = "pending"
     metadata: Dict[str, Any] = field(default_factory=dict)
+    context: Optional[Dict[str, Any]] = None
+    priority: int = 5
 
     def with_agent(self, agent_name: str) -> 'Task':
         """Return new task with assigned agent."""
@@ -156,28 +130,24 @@ class OrchestratorState:
 
 # Pure functions for orchestration logic
 
-def calculate_agent_score(capability: AgentCapability, task: Task) -> float:
-    """Calculate how well an agent matches a task (pure function)."""
-    skill_match = capability.matches_task(list(task.required_skills))
-    priority_weight = capability.priority / 10.0
-    return skill_match * priority_weight
+def find_best_agent(capabilities: Dict[str, AgentCapability], task: Task, task_index: int = 0) -> Optional[str]:
+    """Find the best agent for a task using round-robin distribution.
 
-
-def find_best_agent(capabilities: Dict[str, AgentCapability], task: Task) -> Optional[str]:
-    """Find the best agent for a task (pure function)."""
+    Args:
+        capabilities: Dict of agent capabilities
+        task: Task to assign
+        task_index: Index of task in batch (for round-robin)
+    """
     if not capabilities:
         return None
 
-    scores = {
-        name: calculate_agent_score(cap, task)
-        for name, cap in capabilities.items()
-    }
+    # If task explicitly assigned, use that
+    if task.assigned_agent and task.assigned_agent in capabilities:
+        return task.assigned_agent
 
-    if not scores:
-        return None
-
-    best_agent = max(scores.items(), key=lambda x: x[1])
-    return best_agent[0] if best_agent[1] > 0 else None
+    # Round-robin distribution across agents
+    agent_names = list(capabilities.keys())
+    return agent_names[task_index % len(agent_names)]
 
 
 def filter_messages_for_agent(messages: Tuple[Message, ...], agent_name: str) -> List[Message]:
@@ -197,7 +167,6 @@ def create_stats(state: OrchestratorState) -> Dict[str, Any]:
         'execution_mode': state.execution_mode.value,
         'registered_agents': len(state.agents),
         'agents': list(state.agents.keys()),
-        'agent_roles': {name: cap.role for name, cap in state.capabilities.items()},
         'tasks_completed': count_tasks_by_status(state.tasks, "completed"),
         'tasks_failed': count_tasks_by_status(state.tasks, "failed"),
         'total_tasks': len(state.tasks),
@@ -208,8 +177,8 @@ def create_stats(state: OrchestratorState) -> Dict[str, Any]:
 async def execute_single_task(agent: Agent, task: Task) -> Dict[str, Any]:
     """Execute a single task with an agent (impure - async I/O operation)."""
     try:
-        # Agent.process_input is now async
-        result = await agent.process_input(task.description)
+        # Agent.infer is now async
+        result = await agent.infer(task.description)
         return {
             'task': task.description,
             'agent': task.assigned_agent,
@@ -226,12 +195,12 @@ async def execute_single_task(agent: Agent, task: Task) -> Dict[str, Any]:
         }
 
 
-def assign_task_to_agent(task: Task, capabilities: Dict[str, AgentCapability]) -> Task:
+def assign_task_to_agent(task: Task, capabilities: Dict[str, AgentCapability], task_index: int = 0) -> Task:
     """Assign task to best matching agent (pure function)."""
     if task.assigned_agent:
         return task
 
-    agent_name = find_best_agent(capabilities, task)
+    agent_name = find_best_agent(capabilities, task, task_index)
     if agent_name:
         logger.info(f"Routed task to '{agent_name}'")
         return task.with_agent(agent_name).with_status("in_progress")
@@ -311,22 +280,31 @@ class Orchestrator:
         """Get shared memory (mutable for backwards compatibility)."""
         return self._state.shared_data
 
-    def add_agent(self, agent: Agent) -> None:
-        """Add an agent to the orchestrator."""
-        # Create capability from agent attributes
+    def _add_agent_internal(self, agent: Agent) -> None:
+        """Internal method to add a single agent."""
         capability = AgentCapability(
-            role=agent.role or "custom",
-            skills=agent.skills,
             priority=agent.priority,
-            description=f"{agent.role or 'custom'} agent: {agent.name}"
+            description=f"Agent: {agent.name}"
         )
         self._state = self._state.with_agent(agent.name, agent, capability)
-        logger.info(f"Added agent '{agent.name}' with role {capability.role}")
+        logger.info(f"Added agent '{agent.name}'")
 
-    def add_agents(self, agents: List[Agent]) -> None:
-        """Add multiple agents to the orchestrator."""
+    def with_agents(self, agents: List[Agent]) -> 'Orchestrator':
+        """Add agents and return self for chaining.
+
+        Args:
+            agents: List of Agent objects to add
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> orch = Orchestrator().with_agents([agent1])  # Single agent
+            >>> orch = Orchestrator().with_agents([agent1, agent2])  # Multiple agents
+        """
         for agent in agents:
-            self.add_agent(agent)
+            self._add_agent_internal(agent)
+        return self
 
     def remove_agent(self, agent_name: str) -> None:
         """Remove an agent from the orchestrator."""
@@ -351,14 +329,25 @@ class Orchestrator:
         """Route task to best agent (pure delegation)."""
         return find_best_agent(self._state.capabilities, task)
 
-    async def execute(self, tasks: List[Task], mode: Optional[ExecutionMode] = None) -> List[Dict[str, Any]]:
-        """Execute tasks using specified mode (async)."""
+    async def execute(self, tasks: List[Any], mode: Optional[ExecutionMode] = None) -> List[Dict[str, Any]]:
+        """Execute tasks using specified mode (async).
+
+        Args:
+            tasks: List of strings or Task objects
+            mode: Optional execution mode override
+        """
+        # Convert strings to Task objects
+        task_objects = [
+            Task(description=t) if isinstance(t, str) else t
+            for t in tasks
+        ]
+
         exec_mode = mode or self.execution_mode
 
         if exec_mode == ExecutionMode.SEQUENTIAL:
-            return await self.execute_task_sequential(tasks)
+            return await self.execute_task_sequential(task_objects)
         elif exec_mode == ExecutionMode.PARALLEL:
-            return await self.execute_task_parallel(tasks)
+            return await self.execute_task_parallel(task_objects)
         else:
             raise ValueError(f"Mode {exec_mode} requires specific method call")
 
@@ -366,9 +355,9 @@ class Orchestrator:
         """Execute tasks sequentially (async functional pipeline)."""
         results = []
 
-        for task in tasks:
+        for idx, task in enumerate(tasks):
             # Pure: Assign agent
-            assigned_task = assign_task_to_agent(task, self._state.capabilities)
+            assigned_task = assign_task_to_agent(task, self._state.capabilities, idx)
 
             if not assigned_task.assigned_agent:
                 result = {
@@ -404,8 +393,8 @@ class Orchestrator:
         """Execute tasks in parallel (async functional + concurrent)."""
         # Pure: Assign all agents
         assigned_tasks = [
-            assign_task_to_agent(task, self._state.capabilities)
-            for task in tasks
+            assign_task_to_agent(task, self._state.capabilities, idx)
+            for idx, task in enumerate(tasks)
         ]
 
         async def execute_task_wrapper(task: Task) -> Tuple[Task, Dict[str, Any]]:
@@ -462,7 +451,7 @@ class Orchestrator:
         manager_prompt = f"Analyze and summarize the following results:\n\n{summary}"
 
         # Manager is now async
-        manager_result = await manager.process_input(manager_prompt)
+        manager_result = await manager.infer(manager_prompt)
 
         return {
             'mode': 'hierarchical',
@@ -489,7 +478,7 @@ class Orchestrator:
                 prompt = f"{context}Provide your perspective on this topic:"
 
                 # Impure: Get response (async)
-                response = await agent.process_input(prompt)
+                response = await agent.infer(prompt)
 
                 round_responses.append({
                     'round': round_num + 1,
@@ -508,7 +497,7 @@ class Orchestrator:
                 summary += f"\nRound {resp['round']} - {resp['agent']}:\n{resp['response']}\n"
 
         consensus_prompt = f"{summary}\n\nProvide a consensus summary integrating all perspectives:"
-        consensus = await synthesizer.process_input(consensus_prompt)
+        consensus = await synthesizer.infer(consensus_prompt)
 
         return {
             'mode': 'debate',
@@ -527,64 +516,3 @@ class Orchestrator:
         """Reset orchestrator state."""
         self._state = self._state.reset()
         logger.info("Orchestrator state reset")
-
-
-# Helper functions
-
-def make_agent(
-    name: str,
-    role: str,
-    model: str = "llama2",
-    skills: Optional[List[str]] = None,
-    **agent_kwargs
-) -> Agent:
-    """Create specialized agent with role and skills.
-
-    Args:
-        name: Agent name
-        role: Agent role (use AgentRole.* constants or any custom string)
-        model: Ollama model to use
-        skills: Custom skills (if None, uses defaults for predefined roles)
-        **agent_kwargs: Additional Agent constructor arguments
-
-    Returns:
-        Configured Agent instance
-    """
-
-    # Define default skills for predefined roles
-    default_skills_map = {
-        AgentRole.RESEARCHER: ["research", "search", "analyze", "gather information"],
-        AgentRole.CODER: ["code", "programming", "debug", "implement", "refactor"],
-        AgentRole.ANALYST: ["analyze", "evaluate", "statistics", "data analysis"],
-        AgentRole.PLANNER: ["plan", "organize", "schedule", "coordinate"],
-        AgentRole.CRITIC: ["review", "critique", "evaluate", "feedback"],
-        AgentRole.WRITER: ["write", "document", "compose", "edit"],
-        AgentRole.COORDINATOR: ["coordinate", "manage", "delegate", "organize"],
-    }
-
-    agent_skills = skills or default_skills_map.get(role, [])
-
-    # Define context for predefined roles
-    role_contexts = {
-        AgentRole.RESEARCHER: "You are a research specialist focused on gathering and analyzing information.",
-        AgentRole.CODER: "You are a programming expert focused on writing and debugging code.",
-        AgentRole.ANALYST: "You are a data analyst focused on analyzing and interpreting information.",
-        AgentRole.PLANNER: "You are a planning specialist focused on organizing and coordinating tasks.",
-        AgentRole.CRITIC: "You are a critical reviewer focused on evaluating and providing constructive feedback.",
-        AgentRole.WRITER: "You are a writing specialist focused on creating clear documentation.",
-        AgentRole.COORDINATOR: "You are a coordination specialist focused on managing multiple tasks and agents.",
-    }
-
-    # Create agent with role and skills
-    new_agent = Agent(
-        name=name,
-        model=model,
-        role=role,
-        skills=agent_skills,
-        **agent_kwargs
-    )
-
-    if role in role_contexts:
-        new_agent.set_context(role_contexts[role])
-
-    return new_agent

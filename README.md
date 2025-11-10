@@ -1,179 +1,200 @@
 # AgentU
 
-A flexible Python framework for building AI agents with memory, tools, and orchestration.
+**The sleekest way to build AI agents.**
 
 ```bash
 pip install agentu
 ```
 
-## Quick Start
+## Why AgentU?
 
-### Basic Agent
+```python
+# This is all you need:
+from agentu import Agent
+
+def search_products(query: str) -> list:
+    return db.products.search(query)
+
+agent = Agent("sales").with_tools([search_products])
+
+# Direct execution
+result = await agent.call("search_products", {"query": "laptop"})
+
+# Natural language (LLM figures out the tool + params)
+result = await agent.infer("Find me laptops under $1500")
+```
+
+## Workflows in 3 Lines
+
+```python
+# Sequential: researcher → analyst → writer
+workflow = researcher("Find AI trends") >> analyst("Analyze") >> writer("Summarize")
+
+# Parallel: run 3 searches concurrently
+workflow = search("AI") & search("ML") & search("Crypto")
+
+# Combined: parallel then merge
+workflow = (search("AI") & search("ML") & search("Crypto")) >> analyst("Compare")
+
+result = await workflow.run()
+```
+
+**`>>` chains steps. `&` runs in parallel.** That's the entire API.
+
+## Memory
+
+```python
+agent.remember("Customer prefers email", importance=0.9)
+memories = agent.recall(query="email")
+```
+
+Stored in SQLite. Searchable. Persistent.
+
+## REST API
+
+```python
+from agentu import serve
+
+serve(agent, port=8000)
+# curl -X POST localhost:8000/execute -d '{"tool_name": "search_products", ...}'
+```
+
+Auto-generated Swagger docs at `/docs`.
+
+## Real-World Example: Automated Code Review
 
 ```python
 import asyncio
-from agentu import Agent, Tool
+from agentu import Agent
 
-def calculator(x: float, y: float, op: str) -> float:
-    return {"+": x+y, "-": x-y, "*": x*y, "/": x/y}[op]
+def get_pr_diff(pr_number: int) -> str:
+    """Fetch PR changes from GitHub."""
+    # GitHub API integration
+    return "diff --git a/src/auth.py... +added_line -removed_line"
 
-agent = Agent("assistant", model="llama3")
-agent.add_tool(Tool(
-    name="calc",
-    description="Perform calculations",
-    function=calculator,
-    parameters={"x": "float", "y": "float", "op": "str: +,-,*,/"}
-))
+def run_tests(branch: str) -> dict:
+    """Run test suite."""
+    return {"passed": 47, "failed": 2, "coverage": 94.2}
+
+def post_comment(pr_number: int, comment: str) -> bool:
+    """Post review comment to GitHub."""
+    return True
 
 async def main():
-    # Natural language execution (requires Ollama)
-    result = await agent.process_input("Calculate 15 times 7")
-    print(result)  # {'tool_used': 'calc', 'result': 105, ...}
+    # Setup agents
+    reviewer = Agent("reviewer", model="gpt-4").with_tools([get_pr_diff])
+    tester = Agent("tester").with_tools([run_tests])
+    commenter = Agent("commenter").with_tools([post_comment])
 
-    # Direct execution (no LLM)
-    result = await agent.execute_tool("calc", {"x": 10, "y": 5, "op": "+"})
-    print(result)  # 15
+    # Parallel: review code + run tests
+    workflow = reviewer("Review PR #247") & tester("Run tests on PR #247")
+    code_review, test_results = await workflow.run()
+
+    # Natural language: synthesize findings
+    summary = await commenter.infer(
+        f"Create a review comment for PR #247. "
+        f"Code review: {code_review}. Tests: {test_results}. "
+        f"Be constructive and specific."
+    )
+
+    # Post to GitHub
+    await commenter.call("post_comment", {"pr_number": 247, "comment": summary})
+    print("✓ Review posted to PR #247")
 
 asyncio.run(main())
 ```
 
-### Multi-Agent Orchestration
+**What this does:**
+- Reviews code and runs tests **in parallel** (saves time)
+- Uses `infer()` to write **human-quality review comments**
+- Posts directly to GitHub
+- **Zero manual work** - runs on every PR
+
+## Advanced: Lambda Control
+
+Need precise data flow? Use lambdas:
 
 ```python
-from agentu.orchestrator import Orchestrator, AgentRole, Task, make_agent
-
-async def main():
-    orchestrator = Orchestrator()
-
-    orchestrator.add_agents([
-        make_agent("Researcher", AgentRole.RESEARCHER),
-        make_agent("Analyst", AgentRole.ANALYST),
-        make_agent("DataEngineer", "data-engineer", skills=["etl", "sql"])  # Custom role
-    ])
-
-    results = await orchestrator.execute([
-        Task(description="Research AI trends", required_skills=["research"]),
-        Task(description="Analyze findings", required_skills=["analyze"])
-    ])
-
-asyncio.run(main())
-```
-
-**Execution Modes:** `SEQUENTIAL`, `PARALLEL`, `HIERARCHICAL`, `DEBATE`
-
-**Predefined Roles:** `RESEARCHER`, `CODER`, `ANALYST`, `PLANNER`, `CRITIC`, `WRITER`, `COORDINATOR`
-
-## Features
-
-### Memory System
-
-```python
-agent = Agent("smart_agent", memory_path="agent.db")
-
-# Store and recall
-agent.remember("API endpoint: /v1/chat", memory_type="fact", importance=0.9)
-results = agent.recall(query="API", limit=5)
-
-# SQLite (default) or JSON storage
-agent = Agent(memory_path="agent.db", use_sqlite=True)
-```
-
-**Memory types:** `conversation`, `fact`, `task`, `observation`
-
-### Web Search
-
-```python
-from agentu import SearchAgent
-
-async def main():
-    agent = SearchAgent("researcher", max_results=5)
-    results = await agent.search("latest AI developments")
-
-asyncio.run(main())
-```
-
-### MCP Integration
-
-```python
-from agentu import Agent, MCPServerConfig, AuthConfig, TransportType
-
-config = MCPServerConfig(
-    name="my_server",
-    transport_type=TransportType.HTTP,
-    url="https://api.example.com/mcp",
-    auth=AuthConfig.bearer_token("token")
+workflow = (
+    researcher("Find companies")
+    >> analyst(lambda prev: f"Extract top 5 from: {prev['result']}")
+    >> writer(lambda prev: f"Write report about: {prev['companies']}")
 )
-
-agent = Agent()
-tools = agent.add_mcp_server(config)
-result = await agent.execute_tool("tool_name", {"param": "value"})
 ```
 
-Load from config file:
+## LLM Support
+
+Works with any OpenAI-compatible API:
+
 ```python
-agent.load_mcp_tools("mcp_config.json")
+# Ollama (default)
+Agent("assistant", model="qwen3")
+
+# OpenAI
+Agent("assistant", model="gpt-4", api_key="sk-...")
+
+# vLLM, LM Studio, etc.
+Agent("assistant", model="mistral", api_base="http://localhost:8000/v1")
 ```
 
-## API
+## MCP Integration
+
+Connect to Model Context Protocol servers:
+
+```python
+agent.with_mcp(["http://localhost:3000"])
+agent.with_mcp([{"url": "https://api.com/mcp", "headers": {"Auth": "token"}}])
+```
+
+## API Reference
 
 ### Agent
-
 ```python
-Agent(
-    name: str,
-    model: str = "llama2",
-    temperature: float = 0.7,
-    enable_memory: bool = True,
-    memory_path: Optional[str] = None,
-    role: Optional[str] = None,
-    skills: Optional[List[str]] = None
-)
+agent = Agent(name, model="qwen3", enable_memory=True)
+agent.with_tools([func1, func2])         # Add tools
+agent.with_mcp([url])                    # Connect MCP servers
+
+await agent.call("tool", params)         # Direct execution
+await agent.infer("natural language")    # LLM routing
+
+agent.remember(content, importance=0.8)  # Store
+agent.recall(query)                      # Search
 ```
 
-**Execution:**
-- `await process_input(text)` - Natural language execution (requires Ollama)
-- `await execute_tool(name, params)` - Direct tool execution
-
-**Tools:**
-- `add_tool(tool)` - Add custom tool
-- `add_mcp_server(config)` - Connect to MCP server
-- `load_mcp_tools(path)` - Load from config
-
-**Memory:**
-- `remember(content, memory_type, importance)`
-- `recall(query, memory_type, limit)`
-- `consolidate_memory(threshold)`
-
-### Orchestrator
-
+### Workflows
 ```python
-Orchestrator(name: str = "Orchestrator", execution_mode: ExecutionMode = SEQUENTIAL)
+agent("task")                            # Create step
+step1 >> step2                           # Sequential
+step1 & step2                            # Parallel
+await workflow.run()                     # Execute
 ```
 
-**Methods:**
-- `add_agent(agent)` - Add single agent
-- `add_agents([agents])` - Add multiple agents
-- `await execute(tasks)` - Execute task list
-- `route_task(task)` - Get best agent for task
-
-### Helper Functions
-
+### serve()
 ```python
-make_agent(name, role, model="llama2", skills=None, **kwargs) -> Agent
+serve(agent, port=8000, enable_cors=True)
 ```
 
-Create agent with predefined or custom role.
+**Endpoints:** `/execute`, `/process`, `/tools`, `/memory/remember`, `/memory/recall`, `/docs`
 
 ## Examples
 
-- `examples/simple_agent.py` - Basic agent execution
-- `examples/quickstart_orchestration.py` - Multi-agent demo
-- `examples/multi_agent_example.py` - Complete orchestration examples
+```bash
+git clone https://github.com/hemanth/agentu
+cd agentu
+
+python examples/basic.py       # Simple agent
+python examples/workflow.py    # Workflows
+python examples/memory.py      # Memory system
+python examples/api.py         # REST API
+```
+
+## Testing
+
+```bash
+pytest
+pytest --cov=agentu
+```
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions welcome at [github.com/hemanth/agentu](https://github.com/hemanth/agentu)
