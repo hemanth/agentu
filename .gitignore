@@ -1,2 +1,15 @@
 dist
 llm-task-log.md
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.sqlite3
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+.DS_Store
