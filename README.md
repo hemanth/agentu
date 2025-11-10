@@ -124,10 +124,13 @@ workflow = (
 
 ## LLM Support
 
-Works with any OpenAI-compatible API:
+Works with any OpenAI-compatible API. **Auto-detects available models** from Ollama:
 
 ```python
-# Ollama (default)
+# Auto-detect (uses first available Ollama model)
+Agent("assistant")
+
+# Explicit model
 Agent("assistant", model="qwen3")
 
 # OpenAI
@@ -150,7 +153,8 @@ agent.with_mcp([{"url": "https://api.com/mcp", "headers": {"Auth": "token"}}])
 
 ### Agent
 ```python
-agent = Agent(name, model="qwen3", enable_memory=True)
+agent = Agent(name)                      # Auto-detects model from Ollama
+agent = Agent(name, model="qwen3")       # Or specify explicitly
 agent.with_tools([func1, func2])         # Add tools
 agent.with_mcp([url])                    # Connect MCP servers
 

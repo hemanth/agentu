@@ -66,7 +66,7 @@ class SearchAgent(Agent):
     def __init__(
         self,
         name: str = "search_assistant",
-        model: str = "llama2",
+        model: Optional[str] = None,
         temperature: float = 0.7,
         max_results: int = 3,
         **kwargs
