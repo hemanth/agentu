@@ -10,7 +10,7 @@ from .memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
 from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
 from .serve import serve, AgentServer
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __all__ = [
     "Agent",
     "Tool",
