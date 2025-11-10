@@ -15,7 +15,7 @@ async def test_search_tool():
     if results and "error" not in results[0]:
         assert all(key in results[0] for key in ["title", "link", "snippet"])
 
-@pytest.mark.skip(reason="Requires Ollama running locally")
+@pytest.mark.skip(reason="Requires OpenAI-compatible inference endpoint")
 @pytest.mark.asyncio
 async def test_search_agent_search():
     agent = SearchAgent("test_search")

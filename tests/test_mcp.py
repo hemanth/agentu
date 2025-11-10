@@ -192,37 +192,30 @@ class TestAgentMCPIntegration:
     """Test Agent integration with MCP."""
 
     @patch.object(MCPToolAdapter, 'load_tools')
-    def test_add_mcp_server(self, mock_load_tools):
+    def test_with_mcp_url(self, mock_load_tools):
+        """Test with_mcp with simple URL."""
         mock_load_tools.return_value = []
 
         agent = Agent(name="test_agent")
-        config = MCPServerConfig(
-            name="test_server",
-            transport_type=TransportType.HTTP,
-            url="https://example.com/mcp"
-        )
+        result = agent.with_mcp(["https://example.com/mcp"])
 
-        tools = agent.add_mcp_server(config)
-        assert isinstance(tools, list)
+        assert result is agent  # Check chainable
+        assert len(agent.tools) == 0  # Mock returns empty
         mock_load_tools.assert_called_once()
 
-    @patch('agentu.agent.load_mcp_servers')
     @patch.object(MCPToolAdapter, 'load_tools')
-    def test_load_mcp_tools(self, mock_load_tools, mock_load_servers):
+    def test_with_mcp_dict(self, mock_load_tools):
+        """Test with_mcp with dict containing auth."""
         mock_load_tools.return_value = []
-        mock_load_servers.return_value = {
-            "test_server": MCPServerConfig(
-                name="test_server",
-                transport_type=TransportType.HTTP,
-                url="https://example.com/mcp"
-            )
-        }
 
         agent = Agent(name="test_agent")
-        tools = agent.load_mcp_tools()
+        result = agent.with_mcp([{
+            "url": "https://example.com/mcp",
+            "headers": {"Authorization": "Bearer token123"}
+        }])
 
-        assert isinstance(tools, list)
-        mock_load_servers.assert_called_once()
+        assert result is agent  # Check chainable
+        mock_load_tools.assert_called_once()
 
 
 class TestMCPToolAdapter:
@@ -529,23 +522,19 @@ class TestEndToEndIntegration:
         mock_post.side_effect = [init_response, tools_response, call_response]
 
         # Create agent and add MCP server
-        auth = AuthConfig.bearer_token("test_token")
-        config = MCPServerConfig(
-            name="math_server",
-            transport_type=TransportType.HTTP,
-            url="https://math.example.com/mcp",
-            auth=auth
-        )
-
         agent = Agent(name="test_agent")
-        tools = agent.add_mcp_server(config)
+        agent.with_mcp([{
+            "url": "https://math.example.com/mcp",
+            "headers": {"Authorization": "Bearer test_token"},
+            "name": "math_server"
+        }])
 
         # Verify tools loaded
-        assert len(tools) == 1
-        assert tools[0].name == "math_server_calculator"
+        assert len(agent.tools) == 1
+        assert agent.tools[0].name == "math_server_calculator"
 
         # Execute tool
-        result = await agent.execute_tool("math_server_calculator", {
+        result = await agent.call("math_server_calculator", {
             "operation": "add",
             "x": 40,
             "y": 2
@@ -554,7 +543,7 @@ class TestEndToEndIntegration:
         assert result == "42"
         agent.close_mcp_connections()
 
-    @patch('agentu.agent.load_mcp_servers')
+    @patch('agentu.mcp_config.load_mcp_servers')
     @patch('agentu.mcp_transport.requests.post')
     def test_auto_load_from_config(self, mock_post, mock_load_servers):
         """Test auto-loading tools from config file."""
@@ -585,7 +574,7 @@ class TestEndToEndIntegration:
         mock_post.side_effect = [init_response, tools_response]
 
         # Create agent with auto-load
-        agent = Agent(name="auto_agent", load_mcp_tools=True)
+        agent = Agent(name="auto_agent", load_mcp_tools=True, mcp_config_path="config.json")
 
         # Verify load was called
         mock_load_servers.assert_called_once()

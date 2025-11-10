@@ -62,17 +62,18 @@ search_tool = Tool(
 
 class SearchAgent(Agent):
     """A specialized agent for web searches using DuckDuckGo."""
-    
+
     def __init__(
         self,
         name: str = "search_assistant",
         model: str = "llama2",
         temperature: float = 0.7,
-        max_results: int = 3
+        max_results: int = 3,
+        **kwargs
     ):
-        super().__init__(name, model, temperature)
+        super().__init__(name, model, temperature, **kwargs)
         self.max_results = max_results
-        self.add_tool(search_tool)
+        self._add_tool_internal(search_tool)
         self.set_context(
             "You are a search assistant that helps find relevant information on the web. "
             "When searching, you should:\n"
@@ -88,16 +89,20 @@ class SearchAgent(Agent):
         max_results: Optional[int] = None,
         region: str = "wt-wt",
         safesearch: str = "moderate"
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, str]]:
         """
-        Perform a web search with the given query (async).
+        Perform a web search directly without LLM (async).
 
-        This is a convenience method that wraps the process_input method
-        with search-specific parameters.
+        Args:
+            query: Search query string
+            max_results: Maximum number of results (uses instance default if None)
+            region: Region for search results
+            safesearch: SafeSearch setting
+
+        Returns:
+            List of search results
         """
         if max_results is None:
             max_results = self.max_results
 
-        return await self.process_input(
-            f"Search for: {query}"
-        )
+        return await search_duckduckgo(query, max_results, region, safesearch)
