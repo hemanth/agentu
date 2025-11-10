@@ -19,7 +19,7 @@ def calculator(x: float, y: float, operation: str) -> float:
 @pytest.fixture
 def agent():
     """Create a test agent with calculator tool."""
-    agent = Agent("test_agent", model="llama2", enable_memory=True)
+    agent = Agent("test_agent", model="qwen3:latest", enable_memory=True)
     calc_tool = Tool(
         name="calculator",
         description="Perform basic arithmetic operations",
@@ -58,7 +58,7 @@ def test_root_endpoint(client):
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "test_agent"
-    assert data["model"] == "llama2"
+    assert data["model"] == "qwen3:latest"
     assert data["tools"] == 1
     assert data["memory_enabled"] is True
 

@@ -17,8 +17,46 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def get_ollama_models(api_base: str = "http://localhost:11434") -> List[str]:
+    """Get list of available Ollama models.
+
+    Args:
+        api_base: Base URL for Ollama API
+
+    Returns:
+        List of model names, or empty list if unable to fetch
+    """
+    try:
+        response = requests.get(f"{api_base.rstrip('/')}/api/tags", timeout=2)
+        response.raise_for_status()
+        models_data = response.json()
+        models = [model["name"] for model in models_data.get("models", [])]
+        return models
+    except Exception as e:
+        logger.warning(f"Unable to fetch Ollama models: {e}")
+        return []
+
+
+def get_default_model(api_base: str = "http://localhost:11434") -> str:
+    """Get the default model to use (first available from Ollama).
+
+    Args:
+        api_base: Base URL for Ollama API
+
+    Returns:
+        Model name (first available model, or "qwen3:latest" as fallback)
+    """
+    models = get_ollama_models(api_base)
+    if models:
+        logger.info(f"Available Ollama models: {models}")
+        logger.info(f"Using default model: {models[0]}")
+        return models[0]
+    logger.warning("No Ollama models found, using 'qwen3:latest' as fallback")
+    return "qwen3:latest"
+
+
 class Agent:
-    def __init__(self, name: str, model: str = "llama2", temperature: float = 0.7,
+    def __init__(self, name: str, model: Optional[str] = None, temperature: float = 0.7,
                  mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
                  enable_memory: bool = True, memory_path: Optional[str] = None,
                  short_term_size: int = 10, use_sqlite: bool = True,
@@ -28,7 +66,7 @@ class Agent:
 
         Args:
             name: Name of the agent
-            model: Model name to use (default: llama2)
+            model: Model name to use (default: auto-detect from Ollama, fallback to qwen3:latest)
             temperature: Temperature for model generation (default: 0.7)
             mcp_config_path: Optional path to MCP configuration file
             load_mcp_tools: Whether to automatically load tools from MCP servers (default: False)
@@ -41,10 +79,18 @@ class Agent:
             api_key: Optional API key for authentication
         """
         self.name = name
-        self.model = model
-        self.temperature = temperature
         self.api_base = api_base.rstrip('/')
         self.api_key = api_key
+
+        # Auto-detect model if not specified
+        if model is None:
+            # Extract base URL without /v1 suffix for Ollama API
+            ollama_base = self.api_base.replace('/v1', '')
+            self.model = get_default_model(ollama_base)
+        else:
+            self.model = model
+
+        self.temperature = temperature
         self.tools: List[Tool] = []
         self.context = ""
         self.conversation_history = []
