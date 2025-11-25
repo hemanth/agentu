@@ -140,6 +140,20 @@ Agent("assistant", model="gpt-4", api_key="sk-...")
 Agent("assistant", model="mistral", api_base="http://localhost:8000/v1")
 ```
 
+## Tool Search
+
+Scale to hundreds of tools without context bloat. Deferred tools are discovered on-demand:
+
+```python
+# Core tools always available, large API set loaded via search
+agent.with_tools([core_func], defer=[api_tool_1, api_tool_2, ...])
+
+# Or defer everything
+agent.with_tools(defer=all_api_tools)
+```
+
+When `defer` is used, a `search_tools` function is auto-added. The agent searches for relevant tools, activates them, then calls them. Multi-turn happens internally.
+
 ## MCP Integration
 
 Connect to Model Context Protocol servers:
@@ -155,11 +169,14 @@ agent.with_mcp([{"url": "https://api.com/mcp", "headers": {"Auth": "token"}}])
 ```python
 agent = Agent(name)                      # Auto-detects model from Ollama
 agent = Agent(name, model="qwen3")       # Or specify explicitly
-agent.with_tools([func1, func2])         # Add tools
+agent = Agent(name, max_turns=5)         # Limit multi-turn inference
+agent.with_tools([func1, func2])         # Add active tools
+agent.with_tools(defer=[many_funcs])     # Add searchable tools
+agent.with_tools([core], defer=[many])   # Both in one call
 agent.with_mcp([url])                    # Connect MCP servers
 
 await agent.call("tool", params)         # Direct execution
-await agent.infer("natural language")    # LLM routing
+await agent.infer("natural language")    # LLM routing (multi-turn)
 
 agent.remember(content, importance=0.8)  # Store
 agent.recall(query)                      # Search
