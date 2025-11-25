@@ -61,7 +61,7 @@ class Agent:
                  enable_memory: bool = True, memory_path: Optional[str] = None,
                  short_term_size: int = 10, use_sqlite: bool = True,
                  priority: int = 5, api_base: str = "http://localhost:11434/v1",
-                 api_key: Optional[str] = None):
+                 api_key: Optional[str] = None, max_turns: int = 10):
         """Initialize an Agent.
 
         Args:
@@ -77,6 +77,7 @@ class Agent:
             priority: Agent priority for task assignment (default: 5)
             api_base: Base URL for OpenAI-compatible API (default: http://localhost:11434/v1 for Ollama)
             api_key: Optional API key for authentication
+            max_turns: Maximum turns for multi-turn inference (default: 10)
         """
         self.name = name
         self.api_base = api_base.rstrip('/')
@@ -92,6 +93,8 @@ class Agent:
 
         self.temperature = temperature
         self.tools: List[Tool] = []
+        self.deferred_tools: List[Tool] = []
+        self.max_turns = max_turns
         self.context = ""
         self.conversation_history = []
         self.mcp_manager = MCPToolManager()
@@ -111,33 +114,114 @@ class Agent:
         if load_mcp_tools and mcp_config_path:
             self.with_mcp([mcp_config_path])
         
-    def _add_tool_internal(self, tool: Union[Tool, Callable]) -> None:
-        """Internal method to add a single tool."""
+    def _add_tool_internal(self, tool: Union[Tool, Callable], deferred: bool = False) -> Tool:
+        """Internal method to add a single tool.
+
+        Returns:
+            The Tool object (created or passed in)
+        """
         if isinstance(tool, Tool):
-            self.tools.append(tool)
-            logger.info(f"Added tool: {tool.name} to agent {self.name}")
+            tool_obj = tool
         elif callable(tool):
             tool_obj = Tool(tool)
-            self.tools.append(tool_obj)
-            logger.info(f"Added tool: {tool_obj.name} to agent {self.name}")
         else:
             raise TypeError(f"Expected Tool or callable, got {type(tool)}")
 
-    def with_tools(self, tools: List[Union[Tool, Callable]]) -> 'Agent':
+        if deferred:
+            self.deferred_tools.append(tool_obj)
+            logger.info(f"Added deferred tool: {tool_obj.name} to agent {self.name}")
+        else:
+            self.tools.append(tool_obj)
+            logger.info(f"Added tool: {tool_obj.name} to agent {self.name}")
+
+        return tool_obj
+
+    def _search_tools(self, query: str, limit: int = 5) -> str:
+        """Search deferred tools and activate matching ones.
+
+        Args:
+            query: Search query to match against tool names and descriptions
+            limit: Maximum number of tools to activate
+
+        Returns:
+            Confirmation message listing activated tools
+        """
+        matches = self._find_matching_tools(query, limit)
+
+        if not matches:
+            return "No matching tools found."
+
+        activated = []
+        for tool in matches:
+            if tool not in self.tools:
+                self.tools.append(tool)
+                activated.append(tool.name)
+
+        if activated:
+            return f"Activated tools: {', '.join(activated)}"
+        return f"Tools already active: {', '.join(t.name for t in matches)}"
+
+    def _find_matching_tools(self, query: str, limit: int) -> List[Tool]:
+        """Find deferred tools matching the query.
+
+        Args:
+            query: Search query
+            limit: Maximum results
+
+        Returns:
+            List of matching Tool objects
+        """
+        query_terms = query.lower().split()
+        scored = []
+
+        for tool in self.deferred_tools:
+            text = f"{tool.name} {tool.description}".lower()
+            score = sum(1 for term in query_terms if term in text)
+            if score > 0:
+                scored.append((score, tool))
+
+        scored.sort(reverse=True, key=lambda x: x[0])
+        return [tool for _, tool in scored[:limit]]
+
+    def _ensure_search_tool(self) -> None:
+        """Add search_tools to active tools if not present."""
+        if not any(t.name == "search_tools" for t in self.tools):
+            search_tool = Tool(
+                self._search_tools,
+                description="Search for and activate tools by query. Use when you need a tool that isn't currently available.",
+                name="search_tools"
+            )
+            self.tools.append(search_tool)
+            logger.info(f"Added search_tools to agent {self.name}")
+
+    def with_tools(
+        self,
+        tools: Optional[List[Union[Tool, Callable]]] = None,
+        defer: Optional[List[Union[Tool, Callable]]] = None
+    ) -> 'Agent':
         """Add tools and return self for chaining.
 
         Args:
-            tools: List of Tool objects or callable functions (auto-wrapped)
+            tools: List of Tool objects or callable functions (always active)
+            defer: List of Tool objects or callable functions (searchable on-demand)
 
         Returns:
             Self for method chaining
 
         Example:
-            >>> agent = Agent("MyAgent").with_tools([my_func])  # Single tool
-            >>> agent = Agent("MyAgent").with_tools([func1, func2])  # Multiple tools
+            >>> agent = Agent("MyAgent").with_tools([my_func])  # Active tools
+            >>> agent = Agent("MyAgent").with_tools(defer=[many_funcs])  # Deferred
+            >>> agent = Agent("MyAgent").with_tools([core], defer=[many])  # Both
         """
-        for tool in tools:
-            self._add_tool_internal(tool)
+        if tools:
+            for tool in tools:
+                self._add_tool_internal(tool, deferred=False)
+
+        if defer:
+            for tool in defer:
+                self._add_tool_internal(tool, deferred=True)
+            self._ensure_search_tool()
+
         return self
 
     def with_mcp(self, servers: List[Union[str, Dict[str, Any]]]) -> 'Agent':
@@ -455,6 +539,12 @@ Example response for calculator:
     async def infer(self, user_input: str) -> Dict[str, Any]:
         """Infer tool and parameters from natural language input.
 
+        Runs a multi-turn agentic loop:
+        1. LLM evaluates which tool to use
+        2. If search_tools called, activate found tools and continue
+        3. If regular tool called, execute and check if more work needed
+        4. If no tool selected (text response), return final result
+
         Args:
             user_input: Natural language query
 
@@ -470,39 +560,95 @@ Example response for calculator:
                 importance=0.5
             )
 
-        evaluation = await self.evaluate_tool_use(user_input)
+        turn_history = []
+        final_response = None
 
-        if not evaluation["selected_tool"]:
-            return {"error": "No appropriate tool found"}
+        for turn in range(self.max_turns):
+            # Build context from previous turns
+            context = self._build_turn_context(user_input, turn_history)
 
-        result = await self.call(
-            evaluation["selected_tool"],
-            evaluation["parameters"]
-        )
+            evaluation = await self.evaluate_tool_use(context)
 
-        response = {
-            "tool_used": evaluation["selected_tool"],
-            "parameters": evaluation["parameters"],
-            "reasoning": evaluation["reasoning"],
-            "result": result
-        }
+            if not evaluation.get("selected_tool"):
+                # No tool selected = task complete or no match
+                if turn_history:
+                    final_response = turn_history[-1]
+                else:
+                    final_response = {"error": "No appropriate tool found"}
+                break
+
+            tool_name = evaluation["selected_tool"]
+            parameters = evaluation["parameters"]
+
+            try:
+                result = await self.call(tool_name, parameters)
+            except Exception as e:
+                result = f"Error: {str(e)}"
+
+            turn_result = {
+                "turn": turn + 1,
+                "tool_used": tool_name,
+                "parameters": parameters,
+                "reasoning": evaluation.get("reasoning", ""),
+                "result": result
+            }
+            turn_history.append(turn_result)
+
+            # If this was search_tools, continue to next turn
+            if tool_name == "search_tools":
+                continue
+
+            # For other tools, check if we should continue
+            # Currently: one non-search tool call = done
+            final_response = turn_result
+            break
+
+        if final_response is None:
+            final_response = {
+                "error": f"Max turns ({self.max_turns}) reached",
+                "history": turn_history
+            }
 
         # Store agent response in memory
-        if self.memory_enabled:
+        if self.memory_enabled and "tool_used" in final_response:
             self.memory.remember(
-                content=f"Agent: Used {evaluation['selected_tool']} - {evaluation['reasoning']}",
+                content=f"Agent: Used {final_response['tool_used']} - {final_response.get('reasoning', '')}",
                 memory_type='conversation',
                 metadata={
                     'role': 'agent',
-                    'tool': evaluation['selected_tool'],
-                    'parameters': evaluation['parameters']
+                    'tool': final_response['tool_used'],
+                    'parameters': final_response.get('parameters', {})
                 },
                 importance=0.6
             )
 
         self.conversation_history.append({
             "user_input": user_input,
-            "response": response
+            "response": final_response,
+            "turns": len(turn_history)
         })
 
-        return response
+        return final_response
+
+    def _build_turn_context(self, user_input: str, turn_history: List[Dict[str, Any]]) -> str:
+        """Build context string for multi-turn inference.
+
+        Args:
+            user_input: Original user input
+            turn_history: List of previous turn results
+
+        Returns:
+            Context string for LLM
+        """
+        if not turn_history:
+            return user_input
+
+        context_parts = [f"Original request: {user_input}", "", "Previous actions:"]
+        for turn in turn_history:
+            context_parts.append(
+                f"- Called {turn['tool_used']}: {turn['result']}"
+            )
+        context_parts.append("")
+        context_parts.append("Continue with the task. What tool should be used next?")
+
+        return "\n".join(context_parts)
