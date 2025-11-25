@@ -145,11 +145,23 @@ Agent("assistant", model="mistral", api_base="http://localhost:8000/v1")
 Scale to hundreds of tools without context bloat. Deferred tools are discovered on-demand:
 
 ```python
-# Core tools always available, large API set loaded via search
-agent.with_tools([core_func], defer=[api_tool_1, api_tool_2, ...])
+def charge_card(amount: float, card_id: str) -> dict:
+    """Charge a credit card."""
+    return {"status": "success", "amount": amount}
 
-# Or defer everything
-agent.with_tools(defer=all_api_tools)
+def send_receipt(email: str, transaction_id: str) -> bool:
+    """Send receipt via email."""
+    return True
+
+def refund_payment(transaction_id: str) -> dict:
+    """Refund a payment transaction."""
+    return {"refunded": True}
+
+# 3 payment tools deferred, discovered when needed
+agent = Agent("payments").with_tools(defer=[charge_card, send_receipt, refund_payment])
+
+result = await agent.infer("charge $50 to card_123")
+# Agent calls search_tools("charge card") → activates charge_card → executes it
 ```
 
 When `defer` is used, a `search_tools` function is auto-added. The agent searches for relevant tools, activates them, then calls them. Multi-turn happens internally.
