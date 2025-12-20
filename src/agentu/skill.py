@@ -23,21 +23,21 @@ class Skill:
     Args:
         name: Unique skill identifier (e.g., "pdf-processing")
         description: When to use this skill (triggers activation)
-        instructions: Path to SKILL.md with procedural knowledge (string)
-        resources: Optional dict of additional files/directories (string values)
+        instructions: Path to SKILL.md with procedural knowledge
+        resources: Optional list of additional resource files
         
     Example:
         >>> pdf_skill = Skill(
         ...     name="pdf-processing",
         ...     description="Extract text and tables from PDF files",
         ...     instructions="skills/pdf/SKILL.md",
-        ...     resources={"forms": "skills/pdf/FORMS.md"}
+        ...     resources=["skills/pdf/FORMS.md", "skills/pdf/TABLES.md"]
         ... )
     """
     name: str
     description: str
     instructions: str
-    resources: Optional[Dict[str, str]] = field(default_factory=dict)
+    resources: Optional[List[str]] = field(default_factory=list)
     
     def __post_init__(self):
         """Convert string paths to Path objects and validate."""
@@ -47,15 +47,19 @@ class Skill:
         if not self.instructions.exists():
             raise FileNotFoundError(f"Skill instructions not found: {self.instructions}")
         
-        # Convert resource strings to Path objects
+        # Convert resource list to dict with auto-generated keys from filenames
         if self.resources:
-            converted_resources = {}
-            for key, path_str in self.resources.items():
-                path = Path(path_str)
+            resource_dict = {}
+            for resource_str in self.resources:
+                path = Path(resource_str)
                 if not path.exists():
-                    raise FileNotFoundError(f"Skill resource '{key}' not found: {path}")
-                converted_resources[key] = path
-            self.resources = converted_resources
+                    raise FileNotFoundError(f"Skill resource not found: {path}")
+                # Use stem (filename without extension) as key
+                key = path.stem.lower().replace('-', '_')
+                resource_dict[key] = path
+            self.resources = resource_dict
+        else:
+            self.resources = {}
     
     def metadata(self) -> str:
         """
