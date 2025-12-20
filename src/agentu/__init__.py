@@ -2,6 +2,7 @@
 
 from .agent import Agent
 from .tools import Tool
+from .skill import Skill
 from .search import SearchAgent, search_tool
 from .mcp_config import MCPConfigLoader, load_mcp_servers
 from .mcp_transport import MCPServerConfig, AuthConfig, TransportType
@@ -10,10 +11,11 @@ from .memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
 from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
 from .serve import serve, AgentServer
 
-__version__ = "1.0.1"
+__version__ = "1.2.0"
 __all__ = [
     "Agent",
     "Tool",
+    "Skill",
     "SearchAgent",
     "search_tool",
     "MCPConfigLoader",

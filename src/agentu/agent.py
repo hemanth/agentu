@@ -12,6 +12,7 @@ from .mcp_config import load_mcp_servers
 from .mcp_tool import MCPToolManager
 from .memory import Memory
 from .workflow import Step
+from .skill import Skill
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ class Agent:
         self.temperature = temperature
         self.tools: List[Tool] = []
         self.deferred_tools: List[Tool] = []
+        self.skills: List[Skill] = []  # Progressive loading skills
         self.max_turns = max_turns
         self.context = ""
         self.conversation_history = []
@@ -310,6 +312,63 @@ class Agent:
         """Close all MCP server connections."""
         self.mcp_manager.close_all()
 
+    def with_skills(self, skills: List[Skill]) -> 'Agent':
+        """Add agent skills with progressive loading.
+        
+        Skills use a 3-level loading system:
+        - Level 1: Metadata (always loaded in system prompt, minimal context)
+        - Level 2: Instructions (loaded when skill triggered)
+        - Level 3: Resources (loaded on-demand)
+        
+        Args:
+            skills: List of Skill objects to add
+            
+        Returns:
+            Self for method chaining
+            
+        Example:
+            >>> from pathlib import Path
+            >>> pdf_skill = Skill(
+            ...     name="pdf-processing",
+            ...     description="Extract text and tables from PDF files",
+            ...     instructions=Path("skills/pdf/SKILL.md"),
+            ...     resources={"forms": Path("skills/pdf/FORMS.md")}
+            ... )
+            >>> agent = Agent("assistant").with_skills([pdf_skill])
+        """
+        self.skills.extend(skills)
+        
+        # Auto-add get_skill_resource tool if not present
+        if skills and not any(t.name == "get_skill_resource" for t in self.tools):
+            def get_skill_resource(skill_name: str, resource_key: str) -> str:
+                """Load a skill resource file on-demand.
+                
+                Args:
+                    skill_name: Name of the skill
+                    resource_key: Resource identifier
+                    
+                Returns:
+                    Resource content
+                """
+                skill = next((s for s in self.skills if s.name == skill_name), None)
+                if not skill:
+                    return f"Error: Skill '{skill_name}' not found"
+                try:
+                    return skill.load_resource(resource_key)
+                except KeyError as e:
+                    available = skill.list_resources()
+                    return f"Error: {str(e)}. Available resources: {available}"
+            
+            self._add_tool_internal(Tool(
+                get_skill_resource,
+                description="Load additional documentation or resources from an activated skill",
+                name="get_skill_resource"
+            ))
+            logger.info(f"Added get_skill_resource tool for {len(skills)} skills")
+        
+        logger.info(f"Added {len(skills)} skills to agent {self.name}")
+        return self
+
     def __call__(self, task: Union[str, Callable]) -> Step:
         """Make agent callable to create workflow steps.
 
@@ -421,13 +480,25 @@ class Agent:
         self.context = context
         
     def _format_tools_for_prompt(self) -> str:
-        """Format tools into a string for the prompt."""
-        tools_str = "Available tools:\n\n"
+        """Format tools and skills into a string for the prompt."""
+        prompt_parts = []
+        
+        # Add skill metadata (Level 1: always loaded, minimal context)
+        if self.skills:
+            prompt_parts.append("Available Skills:\n")
+            for skill in self.skills:
+                prompt_parts.append(skill.metadata())
+                prompt_parts.append("")  # Blank line
+            prompt_parts.append("")  # Extra blank line
+        
+        # Add tool descriptions
+        prompt_parts.append("Available tools:\n")
         for tool in self.tools:
-            tools_str += f"Tool: {tool.name}\n"
-            tools_str += f"Description: {tool.description}\n"
-            tools_str += f"Parameters: {json.dumps(tool.parameters, indent=2)}\n\n"
-        return tools_str
+            prompt_parts.append(f"Tool: {tool.name}")
+            prompt_parts.append(f"Description: {tool.description}")
+            prompt_parts.append(f"Parameters: {json.dumps(tool.parameters, indent=2)}\n")
+        
+        return "\n".join(prompt_parts)
 
     async def _call_llm(self, prompt: str) -> str:
         """Make an async API call to OpenAI-compatible endpoint."""
@@ -536,6 +607,32 @@ Example response for calculator:
                     raise
         raise ValueError(f"Tool {tool_name} not found")
 
+    def _match_skills(self, prompt: str) -> List[Skill]:
+        """Determine which skills are relevant to the prompt.
+        
+        Uses keyword matching against skill descriptions to activate
+        skills on-demand (Level 2 loading).
+        
+        Args:
+            prompt: User input or task description
+            
+        Returns:
+            List of matched Skill objects
+        """
+        matched = []
+        prompt_lower = prompt.lower()
+        
+        for skill in self.skills:
+            # Extract keywords from description (simple word matching)
+            desc_words = skill.description.lower().split()
+            
+            # Check if any description keywords appear in prompt
+            if any(word in prompt_lower for word in desc_words if len(word) > 3):
+                matched.append(skill)
+                logger.info(f"Matched skill: {skill.name} for prompt: {prompt[:50]}...")
+        
+        return matched
+
     async def infer(self, user_input: str) -> Dict[str, Any]:
         """Infer tool and parameters from natural language input.
 
@@ -560,12 +657,17 @@ Example response for calculator:
                 importance=0.5
             )
 
+        # Auto-match skills based on user input (Level 2 activation)
+        active_skills = self._match_skills(user_input)
+        if active_skills:
+            logger.info(f"Activated {len(active_skills)} skill(s): {[s.name for s in active_skills]}")
+
         turn_history = []
         final_response = None
 
         for turn in range(self.max_turns):
-            # Build context from previous turns
-            context = self._build_turn_context(user_input, turn_history)
+            # Build context from previous turns (includes skill instructions if active)
+            context = self._build_turn_context(user_input, turn_history, active_skills)
 
             evaluation = await self.evaluate_tool_use(context)
 
@@ -630,25 +732,42 @@ Example response for calculator:
 
         return final_response
 
-    def _build_turn_context(self, user_input: str, turn_history: List[Dict[str, Any]]) -> str:
+    def _build_turn_context(self, user_input: str, turn_history: List[Dict[str, Any]], 
+                            active_skills: Optional[List[Skill]] = None) -> str:
         """Build context string for multi-turn inference.
-
+        
         Args:
             user_input: Original user input
             turn_history: List of previous turn results
-
+            active_skills: Skills that have been activated for this request
+            
         Returns:
             Context string for LLM
         """
+        context_parts = []
+        
+        # Add skill instructions (Level 2 loading) if skills are active
+        if active_skills:
+            context_parts.append("=== Active Skills ===")
+            for skill in active_skills:
+                context_parts.append(f"\n## Skill: {skill.name}")
+                context_parts.append(skill.load_instructions())
+                context_parts.append("")
+            context_parts.append("=== End Skills ===\n")
+        
+        # Add original request
         if not turn_history:
-            return user_input
-
-        context_parts = [f"Original request: {user_input}", "", "Previous actions:"]
+            return "\n".join(context_parts) + user_input if context_parts else user_input
+        
+        # Multi-turn context
+        context_parts.append(f"Original request: {user_input}")
+        context_parts.append("")
+        context_parts.append("Previous actions:")
         for turn in turn_history:
             context_parts.append(
                 f"- Called {turn['tool_used']}: {turn['result']}"
             )
         context_parts.append("")
         context_parts.append("Continue with the task. What tool should be used next?")
-
+        
         return "\n".join(context_parts)
