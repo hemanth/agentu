@@ -128,14 +128,13 @@ workflow = (
 
 ```python
 from agentu import Agent, Skill
-from pathlib import Path
 
 # Create a skill (instructions stored in markdown files)
 pdf_skill = Skill(
     name="pdf-processing",
     description="Extract text and tables from PDF files",
-    instructions=Path("skills/pdf/SKILL.md"),
-    resources={"forms": Path("skills/pdf/FORMS.md")}
+    instructions="skills/pdf/SKILL.md",
+    resources={"forms": "skills/pdf/FORMS.md"}
 )
 
 # Attach to agent
