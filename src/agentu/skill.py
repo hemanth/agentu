@@ -9,7 +9,7 @@ Skills provide domain-specific expertise through a 3-level loading system:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, List, Union
+from typing import Dict, Optional, List
 
 
 @dataclass
@@ -23,8 +23,8 @@ class Skill:
     Args:
         name: Unique skill identifier (e.g., "pdf-processing")
         description: When to use this skill (triggers activation)
-        instructions: Path to SKILL.md with procedural knowledge (str or Path)
-        resources: Optional dict of additional files/directories (str or Path values)
+        instructions: Path to SKILL.md with procedural knowledge (string)
+        resources: Optional dict of additional files/directories (string values)
         
     Example:
         >>> pdf_skill = Skill(
@@ -36,24 +36,22 @@ class Skill:
     """
     name: str
     description: str
-    instructions: Union[str, Path]
-    resources: Optional[Dict[str, Union[str, Path]]] = field(default_factory=dict)
+    instructions: str
+    resources: Optional[Dict[str, str]] = field(default_factory=dict)
     
     def __post_init__(self):
-        """Validate paths exist and convert strings to Path objects."""
-        # Convert instructions to Path if it's a string
-        if isinstance(self.instructions, str):
-            self.instructions = Path(self.instructions)
+        """Convert string paths to Path objects and validate."""
+        # Convert instructions string to Path
+        self.instructions = Path(self.instructions)
         
         if not self.instructions.exists():
             raise FileNotFoundError(f"Skill instructions not found: {self.instructions}")
         
-        # Convert resource paths to Path objects if they're strings
+        # Convert resource strings to Path objects
         if self.resources:
             converted_resources = {}
-            for key, path in self.resources.items():
-                if isinstance(path, str):
-                    path = Path(path)
+            for key, path_str in self.resources.items():
+                path = Path(path_str)
                 if not path.exists():
                     raise FileNotFoundError(f"Skill resource '{key}' not found: {path}")
                 converted_resources[key] = path
