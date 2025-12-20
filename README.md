@@ -122,14 +122,13 @@ workflow = (
 )
 ```
 
-## Skills: Progressive Loading
+## Skills: 96% Less Context
 
-**NEW in v1.2.0**: Package domain expertise that loads on-demand. **96%+ context savings**.
+**NEW in v1.2.1**: Domain expertise that loads on-demand.
 
 ```python
 from agentu import Agent, Skill
 
-# Create a skill (instructions stored in markdown files)
 pdf_skill = Skill(
     name="pdf-processing",
     description="Extract text and tables from PDF files",
@@ -137,22 +136,15 @@ pdf_skill = Skill(
     resources={"forms": "skills/pdf/FORMS.md"}
 )
 
-# Attach to agent
 agent = Agent("assistant").with_skills([pdf_skill])
 
-# Skills auto-load when needed!
+# Skills auto-activate on matching prompts
 await agent.infer("Extract tables from report.pdf")
-# → PDF skill activates automatically
-# → Agent gets PDF expertise
-# → Completes task
 ```
 
-**How it works:**
-- **Level 1 (Metadata)**: Always loaded (~100 chars) - enables discovery
-- **Level 2 (Instructions)**: Loaded when skill triggered (~1500 chars)
-- **Level 3 (Resources)**: Loaded on-demand (variable size)
+**Progressive loading:** Metadata (100 chars) → Instructions (1500 chars) → Resources (on-demand)
 
-**Result**: Install 100+ skills, but only pay context cost for what you use!
+**Result:** 100+ skills, minimal context footprint.
 
 ## LLM Support
 
