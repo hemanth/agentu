@@ -134,7 +134,7 @@ pdf_skill = Skill(
     name="pdf-processing",
     description="Extract text and tables from PDF files",
     instructions="skills/pdf/SKILL.md",
-    resources=["skills/pdf/FORMS.md"]  # Just a list!
+    resources={"forms": "skills/pdf/FORMS.md"}
 )
 
 # Attach to agent
