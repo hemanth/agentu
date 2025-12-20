@@ -9,7 +9,7 @@ Skills provide domain-specific expertise through a 3-level loading system:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union
 
 
 @dataclass
@@ -23,31 +23,41 @@ class Skill:
     Args:
         name: Unique skill identifier (e.g., "pdf-processing")
         description: When to use this skill (triggers activation)
-        instructions: Path to SKILL.md with procedural knowledge
-        resources: Optional dict of additional files/directories
+        instructions: Path to SKILL.md with procedural knowledge (str or Path)
+        resources: Optional dict of additional files/directories (str or Path values)
         
     Example:
         >>> pdf_skill = Skill(
         ...     name="pdf-processing",
         ...     description="Extract text and tables from PDF files",
-        ...     instructions=Path("skills/pdf/SKILL.md"),
-        ...     resources={"forms": Path("skills/pdf/FORMS.md")}
+        ...     instructions="skills/pdf/SKILL.md",
+        ...     resources={"forms": "skills/pdf/FORMS.md"}
         ... )
     """
     name: str
     description: str
-    instructions: Path
-    resources: Optional[Dict[str, Path]] = field(default_factory=dict)
+    instructions: Union[str, Path]
+    resources: Optional[Dict[str, Union[str, Path]]] = field(default_factory=dict)
     
     def __post_init__(self):
-        """Validate paths exist."""
+        """Validate paths exist and convert strings to Path objects."""
+        # Convert instructions to Path if it's a string
+        if isinstance(self.instructions, str):
+            self.instructions = Path(self.instructions)
+        
         if not self.instructions.exists():
             raise FileNotFoundError(f"Skill instructions not found: {self.instructions}")
         
+        # Convert resource paths to Path objects if they're strings
         if self.resources:
+            converted_resources = {}
             for key, path in self.resources.items():
+                if isinstance(path, str):
+                    path = Path(path)
                 if not path.exists():
                     raise FileNotFoundError(f"Skill resource '{key}' not found: {path}")
+                converted_resources[key] = path
+            self.resources = converted_resources
     
     def metadata(self) -> str:
         """
