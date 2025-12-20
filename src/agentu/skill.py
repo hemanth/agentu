@@ -24,20 +24,20 @@ class Skill:
         name: Unique skill identifier (e.g., "pdf-processing")
         description: When to use this skill (triggers activation)
         instructions: Path to SKILL.md with procedural knowledge
-        resources: Optional list of additional resource files
+        resources: Optional dict mapping resource keys to file paths
         
     Example:
         >>> pdf_skill = Skill(
         ...     name="pdf-processing",
         ...     description="Extract text and tables from PDF files",
         ...     instructions="skills/pdf/SKILL.md",
-        ...     resources=["skills/pdf/FORMS.md", "skills/pdf/TABLES.md"]
+        ...     resources={"forms": "skills/pdf/FORMS.md"}
         ... )
     """
     name: str
     description: str
     instructions: str
-    resources: Optional[List[str]] = field(default_factory=list)
+    resources: Optional[Dict[str, str]] = field(default_factory=dict)
     
     def __post_init__(self):
         """Convert string paths to Path objects and validate."""
@@ -47,19 +47,15 @@ class Skill:
         if not self.instructions.exists():
             raise FileNotFoundError(f"Skill instructions not found: {self.instructions}")
         
-        # Convert resource list to dict with auto-generated keys from filenames
+        # Convert resource strings to Path objects
         if self.resources:
-            resource_dict = {}
-            for resource_str in self.resources:
-                path = Path(resource_str)
+            converted = {}
+            for key, path_str in self.resources.items():
+                path = Path(path_str)
                 if not path.exists():
-                    raise FileNotFoundError(f"Skill resource not found: {path}")
-                # Use stem (filename without extension) as key
-                key = path.stem.lower().replace('-', '_')
-                resource_dict[key] = path
-            self.resources = resource_dict
-        else:
-            self.resources = {}
+                    raise FileNotFoundError(f"Skill resource '{key}' not found: {path}")
+                converted[key] = path
+            self.resources = converted
     
     def metadata(self) -> str:
         """
