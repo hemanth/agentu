@@ -11,8 +11,9 @@ from .memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
 from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
 from .serve import serve, AgentServer
 from .session import Session, SessionManager
+from .eval import evaluate, EvalResult, FailedCase
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 __all__ = [
     "Agent",
     "Tool",
@@ -38,4 +39,7 @@ __all__ = [
     "AgentServer",
     "Session",
     "SessionManager",
+    "evaluate",
+    "EvalResult",
+    "FailedCase",
 ]
