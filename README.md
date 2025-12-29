@@ -50,6 +50,55 @@ memories = agent.recall(query="email")
 
 Stored in SQLite. Searchable. Persistent.
 
+## Sessions: Stateful Intelligence
+
+**NEW in v1.3.0**: Server-managed conversations that remember everything.
+
+```python
+from agentu import SessionManager
+
+manager = SessionManager()
+session = manager.create_session(agent)
+
+# First turn
+await session.send("What's the weather in SF?")
+
+# Later turn - context automatically remembered!
+await session.send("What about tomorrow?")
+# Agent knows "tomorrow" refers to SF weather
+```
+
+**Features:**
+- Automatic context preservation
+- Multi-user isolation
+- SQLite persistence per session
+- Session timeout handling
+
+## Evaluation: Test Your Agents
+
+**NEW in v1.4.0**: Simple testing framework with multiple matching strategies.
+
+```python
+from agentu import evaluate
+
+test_cases = [
+    {"ask": "What's 5 + 3?", "expect": 8},
+    {"ask": "Weather in SF?", "expect": "sunny"}
+]
+
+results = await evaluate(agent, test_cases)
+print(f"Accuracy: {results.accuracy}%")
+print(results.to_json())  # Export for CI/CD
+```
+
+**Matching strategies:**
+- Exact match
+- Substring match
+- LLM-as-judge (semantic similarity)
+- Custom validators
+
+Outputs color-coded results and exports JSON for continuous integration.
+
 ## REST API
 
 ```python
@@ -218,6 +267,25 @@ agent.remember(content, importance=0.8)  # Store
 agent.recall(query)                      # Search
 ```
 
+### Sessions
+```python
+manager = SessionManager()
+session = manager.create_session(agent)
+await session.send("message")            # Stateful messaging
+session.get_history(limit=10)            # Conversation history
+session.clear_history()                  # Reset conversation
+```
+
+### Evaluation
+```python
+from agentu import evaluate
+
+cases = [{"ask": "query", "expect": "result"}]
+results = await evaluate(agent, cases)
+print(results.accuracy)                  # 95.0
+print(results.to_json())                 # Export JSON
+```
+
 ### Workflows
 ```python
 agent("task")                            # Create step
@@ -242,6 +310,8 @@ cd agentu
 python examples/basic.py       # Simple agent
 python examples/workflow.py    # Workflows
 python examples/memory.py      # Memory system
+python examples/example_sessions.py     # Stateful sessions
+python examples/example_eval.py         # Agent evaluation
 python examples/api.py         # REST API
 ```
 
