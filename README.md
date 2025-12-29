@@ -99,6 +99,41 @@ print(results.to_json())  # Export for CI/CD
 
 Outputs color-coded results and exports JSON for continuous integration.
 
+## Observability: Track Everything
+
+**NEW in v1.5.0**: Built-in monitoring for debugging and production.
+
+```python
+from agentu import Agent, observe
+
+# Configure output
+observe.configure(output="console")  # json | console | silent
+
+agent = Agent("assistant").with_tools([...])
+
+# All tool calls and LLM requests automatically tracked
+await agent.infer("Find me laptops")
+
+# View metrics
+metrics = agent.observer.get_metrics()
+print(f"Tool calls: {metrics['tool_calls']}")
+print(f"Duration: {metrics['total_duration_ms']}ms")
+print(f"Errors: {metrics['errors']}")
+```
+
+**Events tracked:**
+- `tool_call` - Tool execution with duration
+- `llm_request` - LLM requests and responses
+- `inference_start/end` - Multi-turn conversations
+- `error` - Failures and exceptions
+
+**Output formats:**
+- Console: Color-coded,human-readable
+- JSON: Structured logs for parsing
+- Silent: Metrics only, no output
+
+Perfect for debugging, performance monitoring, and production observability.
+
 ## REST API
 
 ```python
@@ -312,6 +347,7 @@ python examples/workflow.py    # Workflows
 python examples/memory.py      # Memory system
 python examples/example_sessions.py     # Stateful sessions
 python examples/example_eval.py         # Agent evaluation
+python examples/example_observe.py      # Observability
 python examples/api.py         # REST API
 ```
 
