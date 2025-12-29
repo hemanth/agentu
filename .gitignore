@@ -14,3 +14,4 @@ htmlcov/
 build/
 .DS_Store
 src/agentu.egg-info/
+*.old
