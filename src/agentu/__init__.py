@@ -10,8 +10,9 @@ from .mcp_tool import MCPToolAdapter, MCPToolManager
 from .memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
 from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
 from .serve import serve, AgentServer
+from .session import Session, SessionManager
 
-__version__ = "1.2.2"
+__version__ = "1.3.0"
 __all__ = [
     "Agent",
     "Tool",
@@ -35,4 +36,6 @@ __all__ = [
     "create_storage",
     "serve",
     "AgentServer",
+    "Session",
+    "SessionManager",
 ]
