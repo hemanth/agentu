@@ -13,6 +13,7 @@ from .mcp_tool import MCPToolManager
 from .memory import Memory
 from .workflow import Step
 from .skill import Skill
+from .observe import Observer, EventType, get_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,6 +112,14 @@ class Agent:
 
         # Orchestration attributes
         self.priority = priority
+        
+        # Initialize observer
+        output_format, enabled = get_config()
+        self.observer = Observer(
+            agent_name=self.name,
+            output=output_format,
+            enabled=enabled
+        )
 
         # Load MCP tools if requested
         if load_mcp_tools and mcp_config_path:
@@ -597,11 +606,15 @@ Example response for calculator:
         for tool in self.tools:
             if tool.name == tool_name:
                 try:
-                    result = tool.function(**parameters)
-                    # Check if result is a coroutine (async function)
-                    if asyncio.iscoroutine(result):
-                        return await result
-                    return result
+                    with self.observer.trace(
+                        EventType.TOOL_CALL,
+                        {"tool_name": tool_name, "params": parameters}
+                    ):
+                        result = tool.function(**parameters)
+                        # Check if result is a coroutine (async function)
+                        if asyncio.iscoroutine(result):
+                            result = await result
+                        return result
                 except Exception as e:
                     logger.error(f"Error calling tool {tool_name}: {str(e)}")
                     raise
@@ -648,6 +661,8 @@ Example response for calculator:
         Returns:
             Dict with tool_used, parameters, reasoning, and result
         """
+        # Track inference start
+        self.observer.record(EventType.INFERENCE_START, {"query": user_input})
         # Store user input in memory
         if self.memory_enabled:
             self.memory.remember(
@@ -729,6 +744,16 @@ Example response for calculator:
             "response": final_response,
             "turns": len(turn_history)
         })
+        
+        # Track inference end
+        self.observer.record(
+            EventType.INFERENCE_END,
+            {
+                "query": user_input,
+                "turns": len(turn_history),
+                "tool_used": final_response.get('tool_used')
+            }
+        )
 
         return final_response
 

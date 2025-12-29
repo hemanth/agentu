@@ -12,8 +12,9 @@ from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_st
 from .serve import serve, AgentServer
 from .session import Session, SessionManager
 from .eval import evaluate, EvalResult, FailedCase
+from . import observe
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 __all__ = [
     "Agent",
     "Tool",
@@ -42,4 +43,5 @@ __all__ = [
     "evaluate",
     "EvalResult",
     "FailedCase",
+    "observe",
 ]
