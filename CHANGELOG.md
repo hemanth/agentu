@@ -1,6 +1,108 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to agentu will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.5.0] - 2025-12-29
+
+### Added
+- **Real-time Observability Dashboard**: Minimalist black/white web UI at `/dashboard` endpoint
+  - Live metrics display (tool calls, LLM requests, errors, duration)
+  - Event stream with verbose metadata and local timestamps
+  - Auto-refresh every second
+  - Built with web components (`<metric-card>`, `<event-stream>`)
+- **Auto-instrumentation**: Automatic tracking of all tool calls and LLM requests
+  - `Observer` class in `observe.py` module
+  - Event types: `tool_call`, `llm_request`, `inference_start/end`, `error`, `session_create/end`
+  - Trace context manager for timing code blocks
+- **Observability API**: 
+  - `GET /dashboard` - Serves observability UI
+  - `GET /api/metrics` - Returns metrics and events as JSON
+- **Flexible Output Formats**:
+  - Console: Color-coded output with symbols (🔧, 🤖, ✓, ✗)
+  - JSON: Structured logs for parsing
+  - Silent: Metrics only, no output
+- **Global Configuration**: `observe.configure(output='console'|'json'|'silent', enabled=True)`
+- Dashboard integrated into existing FastAPI `serve()` - no separate server needed
+
+### Changed
+- Standardized branding from "AgentU" to lowercase "agentu" throughout codebase
+- Event timestamps now use local time instead of UTC
+- Dashboard HTML moved to `src/agentu/static/` folder for cleaner organization
+- Improved event display with tool names, parameters, and query details
+
+### Fixed
+- EventType handling now works with both enum and string types
+- Metrics update correctly for both EventType enums and string event types
+
+## [1.4.0] - 2025-12-29
+
+### Added
+- **Agent Evaluation System**: Test and validate agent responses
+  - `evaluate()` function for running test cases
+  - Multiple matching strategies: exact, substring, LLM-judge, custom validators
+  - `EvalResult` dataclass with pass rate, failed cases, and timing
+  - Color-coded console output (✓ green, ✗ red)
+  - JSON export via `result.to_json()` and `result.to_dict()`
+- Comprehensive test coverage for evaluation features
+- Example script demonstrating all evaluation capabilities
+
+### Changed
+- Version bumped to 1.4.0
+- Added `evaluate`, `EvalResult`, `FailedCase` to package exports
+
+## [1.3.0] - 2025-12-29
+
+### Added
+- **Stateful Sessions**: Session-based conversational memory
+  - `Session` class for managing agent state across multiple interactions
+  - `SessionManager` for handling multiple sessions
+  - Automatic conversation history tracking
+  - Session persistence and restoration
+  - Integration with agent memory system
+- Example scripts for session usage
+- Comprehensive test coverage for session features
+
+### Changed
+- Version bumped to 1.3.0
+- Added `Session`, `SessionManager` to package exports
+
+## [1.2.0] - 2024-XX-XX
+
+### Added
+- MCP (Model Context Protocol) support
+- Workflow system for multi-step agent tasks
+- Skills system for reusable agent capabilities
+- Memory storage backends (JSON, SQLite)
+
+### Changed
+- Improved tool parameter handling
+- Enhanced error messages
+
+## [1.1.0] - 2024-XX-XX
+
+### Added
+- Memory system with short-term and long-term storage
+- Vector similarity search for memory retrieval
+- Memory importance scoring
+
+## [1.0.0] - 2024-XX-XX
+
+### Added
+- Initial release
+- Agent class for creating AI agents
+- Tool system for custom functions
+- REST API server with FastAPI
+- Basic examples and documentation
+
+[1.5.0]: https://github.com/hemanth/agentu/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/hemanth/agentu/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/hemanth/agentu/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/hemanth/agentu/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/hemanth/agentu/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/hemanth/agentu/releases/tag/v1.0.0
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
