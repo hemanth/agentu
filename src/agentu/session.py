@@ -1,4 +1,4 @@
-"""Session-based stateful intelligence for AgentU.
+"""Session-based stateful intelligence for agentu.
 
 Provides server-managed conversation sessions where memory and context
 are automatically preserved across requests, similar to Interactions API.

@@ -1,4 +1,4 @@
-"""Memory module for AgentU - provides short-term and long-term memory capabilities."""
+"""Memory module for agentu - provides short-term and long-term memory capabilities."""
 
 import json
 import time

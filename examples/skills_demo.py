@@ -30,7 +30,7 @@ async def main():
     agent = Agent("pdf-assistant").with_skills([pdf_skill])
     
     print("=" * 60)
-    print("AgentU Skills Demo")
+    print("agentu Skills Demo")
     print("=" * 60)
     print()
     

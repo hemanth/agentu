@@ -1,1 +1,1 @@
-"""Tests for the AgentU package."""
+"""Tests for the agentu package."""

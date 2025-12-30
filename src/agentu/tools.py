@@ -1,4 +1,4 @@
-"""Tool utilities for AgentU."""
+"""Tool utilities for agentu."""
 
 import inspect
 from typing import Callable, Dict, Any, Optional

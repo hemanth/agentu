@@ -1,4 +1,4 @@
-"""Storage backends for AgentU memory system."""
+"""Storage backends for agentu memory system."""
 
 import json
 import sqlite3

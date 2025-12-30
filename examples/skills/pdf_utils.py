@@ -1,4 +1,4 @@
-"""Example PDF processing skill for AgentU."""
+"""Example PDF processing skill for agentu."""
 
 import pdfplumber
 from pathlib import Path

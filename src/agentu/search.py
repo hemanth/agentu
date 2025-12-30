@@ -1,4 +1,4 @@
-"""Search functionality for AgentU."""
+"""Search functionality for agentu."""
 import asyncio
 from typing import List, Dict, Any, Optional
 from duckduckgo_search import DDGS

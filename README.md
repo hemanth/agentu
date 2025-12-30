@@ -1,4 +1,4 @@
-# AgentU
+# agentu
 
 **The sleekest way to build AI agents.**
 
@@ -6,7 +6,7 @@
 pip install agentu
 ```
 
-## Why AgentU?
+## Why agentu?
 
 ```python
 # This is all you need:
@@ -121,16 +121,21 @@ print(f"Duration: {metrics['total_duration_ms']}ms")
 print(f"Errors: {metrics['errors']}")
 ```
 
-**Events tracked:**
-- `tool_call` - Tool execution with duration
-- `llm_request` - LLM requests and responses
-- `inference_start/end` - Multi-turn conversations
-- `error` - Failures and exceptions
+**Real-time Dashboard:**
+```python
+from agentu import serve
 
-**Output formats:**
-- Console: Color-coded,human-readable
-- JSON: Structured logs for parsing
-- Silent: Metrics only, no output
+serve(agent, port=8000)
+# Dashboard: http://localhost:8000/dashboard
+# API Docs: http://localhost:8000/docs
+```
+
+Features:
+- **Auto-instrumentation** - All LLM calls and tool executions tracked
+- **Real-time dashboard** - Black/white minimalist UI with live metrics
+- **Event types**: `tool_call`, `llm_request`, `inference_start/end`, `error`
+- **Output formats**: Console (colored), JSON (structured), Silent (metrics only)
+- **Integrated server** - Dashboard built into FastAPI `/dashboard` endpoint
 
 Perfect for debugging, performance monitoring, and production observability.
 

@@ -34,7 +34,7 @@ class AgentServer:
     def __init__(
         self,
         agent: Agent,
-        title: str = "AgentU API",
+        title: str = "agentu API",
         version: str = "0.1.0",
         enable_cors: bool = False,
         cors_origins: Optional[List[str]] = None,
@@ -194,6 +194,29 @@ class AgentServer:
                     for m in memories
                 ]
             }
+        
+        @self.app.get("/dashboard", include_in_schema=False, tags=["dashboard"])
+        async def dashboard():
+            """Serve observability dashboard."""
+            from fastapi.responses import HTMLResponse
+            from pathlib import Path
+            
+            dashboard_path = Path(__file__).parent / "static" / "dashboard.html"
+            if not dashboard_path.exists():
+                raise HTTPException(status_code=404, detail="Dashboard not found")
+            
+            with open(dashboard_path, 'r') as f:
+                html_content = f.read()
+            
+            return HTMLResponse(content=html_content)
+        
+        @self.app.get("/api/metrics", tags=["dashboard"])
+        async def get_metrics():
+            """Get agent metrics and recent events for dashboard."""
+            return {
+                "metrics": self.agent.observer.get_metrics(),
+                "events": self.agent.observer.get_events(limit=20)
+            }
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs):
         """Run the server.
@@ -210,7 +233,7 @@ def serve(
     agent: Agent,
     host: str = "0.0.0.0",
     port: int = 8000,
-    title: str = "AgentU API",
+    title: str = "agentu API",
     version: str = "0.1.0",
     enable_cors: bool = False,
     cors_origins: Optional[List[str]] = None,

@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>agentu dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            border-bottom: 1px solid #333;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .subtitle {
+            color: #888;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 4px;
+            padding: 20px;
+        }
+
+        .card-title {
+            font-size: 14px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+        }
+
+        .metric-value {
+            font-size: 36px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .event-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .event-item {
+            padding: 10px;
+            border-bottom: 1px solid #1a1a1a;
+            font-size: 13px;
+        }
+
+        .event-item:hover {
+            background: #151515;
+        }
+
+        .event-type {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 2px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+
+        .event-type.tool_call {
+            background: #1a1a1a;
+            color: #fff;
+        }
+
+        .event-type.llm_request {
+            background: #1a1a1a;
+            color: #ccc;
+        }
+
+        .event-type.inference_start {
+            background: #1a2a1a;
+            color: #8f8;
+        }
+
+        .event-type.inference_end {
+            background: #1a2a1a;
+            color: #6d6;
+        }
+
+        .event-type.error {
+            background: #2a1a1a;
+            color: #f88;
+        }
+
+        .event-duration {
+            color: #666;
+            font-size: 11px;
+            float: right;
+        }
+
+        .event-meta {
+            color: #555;
+            font-size: 11px;
+            margin-top: 4px;
+        }
+
+        .gauge {
+            width: 100%;
+            height: 8px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .gauge-fill {
+            height: 100%;
+            background: #333;
+            transition: width 0.3s ease;
+        }
+
+        .gauge-fill.success {
+            background: #2a4a2a;
+        }
+
+        .gauge-fill.error {
+            background: #4a2a2a;
+        }
+
+        .refresh-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border: 2px solid #333;
+            border-top-color: #888;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0a0a0a;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #444;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>agentu dashboard</h1>
+            <div class="subtitle">Real-time observability and monitoring</div>
+        </header>
+
+        <div class="grid">
+            <metric-card id="tool-calls" label="Tool Calls" value="0"></metric-card>
+            <metric-card id="llm-requests" label="LLM Requests" value="0"></metric-card>
+            <metric-card id="errors" label="Errors" value="0" type="error"></metric-card>
+            <metric-card id="duration" label="Total Duration (ms)" value="0"></metric-card>
+        </div>
+
+        <div class="card">
+            <div class="card-title">
+                Recent Events
+                <span class="refresh-indicator"></span>
+            </div>
+            <event-stream id="event-stream"></event-stream>
+        </div>
+    </div>
+
+    <script>
+        // Metric Card Component
+        class MetricCard extends HTMLElement {
+            connectedCallback() {
+                this.render();
+            }
+
+            render() {
+                const label = this.getAttribute('label');
+                const value = this.getAttribute('value');
+                const type = this.getAttribute('type') || 'default';
+
+                this.className = 'card';
+                this.innerHTML = `
+                    <div class="card-title">${label}</div>
+                    <div class="metric-value">${value}</div>
+                    <div class="gauge">
+                        <div class="gauge-fill ${type === 'error' ? 'error' : 'success'}" style="width: 0%"></div>
+                    </div>
+                `;
+            }
+
+            update(value, max = 100) {
+                const valueEl = this.querySelector('.metric-value');
+                const gaugeFill = this.querySelector('.gauge-fill');
+
+                if (valueEl) valueEl.textContent = value;
+                if (gaugeFill) {
+                    const percent = Math.min((value / max) * 100, 100);
+                    gaugeFill.style.width = `${percent}%`;
+                }
+            }
+        }
+
+        // Event Stream Component
+        class EventStream extends HTMLElement {
+            connectedCallback() {
+                this.className = 'event-list';
+                this.render();
+            }
+
+            render() {
+                this.innerHTML = '<div class="event-meta">Waiting for events...</div>';
+            }
+
+            addEvent(event) {
+                // Remove "waiting" message
+                const waiting = this.querySelector('.event-meta');
+                if (waiting && waiting.textContent.includes('Waiting')) {
+                    waiting.remove();
+                }
+
+                const item = document.createElement('div');
+                item.className = 'event-item';
+
+                const duration = event.duration_ms ?
+                    `<span class="event-duration">${event.duration_ms.toFixed(1)}ms</span>` : '';
+
+                // Build detailed metadata display
+                let meta = '';
+                if (event.tool_name) {
+                    meta = `<div class="event-meta">Tool: <strong>${event.tool_name}</strong>`;
+                    if (event.params) {
+                        const paramsStr = JSON.stringify(event.params);
+                        if (paramsStr.length < 60) {
+                            meta += ` - ${paramsStr}`;
+                        }
+                    }
+                    meta += `</div>`;
+                } else if (event.query) {
+                    meta = `<div class="event-meta">Query: "${event.query.substring(0, 80)}${event.query.length > 80 ? '...' : ''}"</div>`;
+                } else if (event.turns) {
+                    meta = `<div class="event-meta">Turns: ${event.turns}${event.tool_used ? `, Tool: ${event.tool_used}` : ''}</div>`;
+                }
+
+                item.innerHTML = `
+                    <span class="event-type ${event.event}">${event.event}</span>
+                    <span>${new Date(event.timestamp).toLocaleTimeString()}</span>
+                    ${duration}
+                    ${meta}
+                `;
+
+                this.insertBefore(item, this.firstChild);
+
+                // Keep only last 50 events
+                while (this.children.length > 50) {
+                    this.removeChild(this.lastChild);
+                }
+            }
+        }
+
+        customElements.define('metric-card', MetricCard);
+        customElements.define('event-stream', EventStream);
+
+        // Dashboard controller
+        class Dashboard {
+            constructor() {
+                this.metrics = {
+                    toolCalls: document.getElementById('tool-calls'),
+                    llmRequests: document.getElementById('llm-requests'),
+                    errors: document.getElementById('errors'),
+                    duration: document.getElementById('duration')
+                };
+                this.eventStream = document.getElementById('event-stream');
+                this.pollInterval = 1000; // 1 second
+                this.lastEventCount = 0;
+                this.start();
+            }
+
+            async fetchData() {
+                try {
+                    const response = await fetch('/api/metrics');
+                    const data = await response.json();
+                    this.updateMetrics(data.metrics);
+                    this.updateEvents(data.events);
+                } catch (error) {
+                    console.error('Failed to fetch data:', error);
+                }
+            }
+
+            updateMetrics(metrics) {
+                this.metrics.toolCalls.update(metrics.tool_calls, 100);
+                this.metrics.llmRequests.update(metrics.llm_requests, 50);
+                this.metrics.errors.update(metrics.errors, 10);
+                this.metrics.duration.update(metrics.total_duration_ms.toFixed(0), 10000);
+            }
+
+            updateEvents(events) {
+                // Only add new events (simple: if count increased)
+                if (events.length > this.lastEventCount) {
+                    // Add newest events first
+                    events.slice(this.lastEventCount).reverse().forEach(event => {
+                        this.eventStream.addEvent(event);
+                    });
+                    this.lastEventCount = events.length;
+                }
+            }
+
+            start() {
+                this.fetchData();
+                setInterval(() => this.fetchData(), this.pollInterval);
+            }
+        }
+
+        // Initialize dashboard
+        new Dashboard();
+    </script>
+</body>
+
+</html>

@@ -1,4 +1,4 @@
-"""AgentU - A flexible Python package for creating AI agents with customizable tools."""
+"""agentu - A flexible Python package for creating AI agents with customizable tools."""
 
 from .agent import Agent
 from .tools import Tool

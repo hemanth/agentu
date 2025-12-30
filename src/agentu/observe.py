@@ -1,4 +1,4 @@
-"""Observability and monitoring for AgentU.
+"""Observability and monitoring for agentu.
 
 Provides simple event tracking, metrics, and logging for debugging
 and production monitoring.
@@ -39,14 +39,17 @@ class Event:
     """Represents an observable event."""
     event_type: EventType
     agent_name: str
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     duration_ms: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
+        # Handle both EventType enum and string
+        event_value = self.event_type.value if hasattr(self.event_type, 'value') else str(self.event_type)
+        
         return {
-            "event": self.event_type.value,
+            "event": event_value,
             "agent": self.agent_name,
             "timestamp": self.timestamp,
             "duration_ms": self.duration_ms,
@@ -126,13 +129,16 @@ class Observer:
     
     def _update_metrics(self, event: Event):
         """Update metrics based on event."""
-        if event.event_type == EventType.TOOL_CALL:
+        # Normalize event type to string for comparison
+        event_str = event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type)
+        
+        if event_str == "tool_call" or event.event_type == EventType.TOOL_CALL:
             self.metrics.tool_calls += 1
-        elif event.event_type == EventType.LLM_REQUEST:
+        elif event_str == "llm_request" or event.event_type == EventType.LLM_REQUEST:
             self.metrics.llm_requests += 1
-        elif event.event_type == EventType.ERROR:
+        elif event_str == "error" or event.event_type == EventType.ERROR:
             self.metrics.errors += 1
-        elif event.event_type == EventType.SESSION_CREATE:
+        elif event_str == "session_create" or event.event_type == EventType.SESSION_CREATE:
             self.metrics.sessions_created += 1
         
         if event.duration_ms:
