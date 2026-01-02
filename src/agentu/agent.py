@@ -511,41 +511,45 @@ class Agent:
 
     async def _call_llm(self, prompt: str) -> str:
         """Make an async API call to OpenAI-compatible endpoint."""
-        try:
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        with self.observer.trace(
+            EventType.LLM_REQUEST,
+            {"model": self.model, "prompt_length": len(prompt)}
+        ):
+            try:
+                headers = {"Content-Type": "application/json"}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.api_base}/chat/completions",
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": self.temperature,
-                        "stream": False
-                    },
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    response.raise_for_status()
-                    response_json = await response.json()
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.api_base}/chat/completions",
+                        json={
+                            "model": self.model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": self.temperature,
+                            "stream": False
+                        },
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        response.raise_for_status()
+                        response_json = await response.json()
 
-                    if "error" in response_json:
-                        logger.error(f"API error: {response_json['error']}")
-                        raise Exception(response_json['error'])
+                        if "error" in response_json:
+                            logger.error(f"API error: {response_json['error']}")
+                            raise Exception(response_json['error'])
 
-                    full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-                    if not full_response:
-                        logger.error("Empty response from API")
-                        raise Exception("Empty response from API")
+                        if not full_response:
+                            logger.error("Empty response from API")
+                            raise Exception("Empty response from API")
 
-                    return full_response
+                        return full_response
 
-        except aiohttp.ClientError as e:
-            logger.error(f"Error calling LLM API: {str(e)}")
-            raise
+            except aiohttp.ClientError as e:
+                logger.error(f"Error calling LLM API: {str(e)}")
+                raise
 
     async def evaluate_tool_use(self, user_input: str) -> Dict[str, Any]:
         """Evaluate which tool to use based on user input (async)."""
