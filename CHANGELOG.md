@@ -5,6 +5,15 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-01-09
+
+### Added
+- **CLI Tool**: `agentu` command-line interface
+  - `agentu ralph PROMPT.md` - Run autonomous loop
+  - `agentu serve --port 8000` - Start API server
+  - `agentu version` - Show version
+  - Options: `--max`, `--timeout`, `--model`, `--api-base`
+
 ## [1.6.0] - 2026-01-09
 
 ### Added

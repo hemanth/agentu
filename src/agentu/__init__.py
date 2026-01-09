@@ -15,7 +15,7 @@ from .eval import evaluate, EvalResult, FailedCase
 from .ralph import ralph, RalphRunner, RalphConfig
 from . import observe
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 __all__ = [
     "Agent",
     "Tool",
