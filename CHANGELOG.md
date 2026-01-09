@@ -5,6 +5,25 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2025-01-09
+
+### Added
+- **Ralph Mode**: Autonomous agent loop inspired by [ghuntley.com/ralph](https://ghuntley.com/ralph)
+  - `agent.ralph()` method for continuous autonomous execution
+  - Reads PROMPT.md file with goal and checkpoints
+  - Automatic completion detection via checkbox parsing
+  - Checkpoint saving every N iterations
+  - Max iterations and timeout guards for safety
+  - Progress callbacks for monitoring
+  - State updates written back to PROMPT.md
+- `RalphRunner`, `RalphConfig`, `RalphState` classes in `ralph.py`
+- `ralph()` standalone function for simpler usage
+- Example: `examples/ralph_demo.py`
+- Test suite: `tests/test_ralph.py` (10 tests)
+
+### Changed
+- Bumped version to 1.6.0
+
 ## [1.5.0] - 2025-12-29
 
 ### Added

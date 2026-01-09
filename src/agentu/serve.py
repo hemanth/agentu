@@ -217,6 +217,89 @@ class AgentServer:
                 "metrics": self.agent.observer.get_metrics(),
                 "events": self.agent.observer.get_events(limit=20)
             }
+        
+        @self.app.get("/playground", include_in_schema=False, tags=["playground"])
+        async def playground():
+            """Serve interactive playground."""
+            from fastapi.responses import HTMLResponse
+            from pathlib import Path
+            
+            playground_path = Path(__file__).parent / "static" / "playground.html"
+            if not playground_path.exists():
+                raise HTTPException(status_code=404, detail="Playground not found")
+            
+            with open(playground_path, 'r') as f:
+                html_content = f.read()
+            
+            return HTMLResponse(content=html_content)
+        
+        @self.app.get("/api/examples", tags=["playground"])
+        async def list_examples():
+            """List all available examples."""
+            from .sandbox import ExampleRunner
+            
+            runner = ExampleRunner()
+            examples = runner.discover_examples()
+            
+            return {
+                "examples": [
+                    {
+                        "name": ex.name,
+                        "title": ex.title,
+                        "description": ex.description,
+                        "category": ex.category,
+                        "lesson_number": ex.lesson_number,
+                        "learning_objectives": ex.learning_objectives
+                    }
+                    for ex in examples
+                ]
+            }
+        
+        @self.app.get("/api/examples/{name}", tags=["playground"])
+        async def get_example(name: str):
+            """Get example details including code."""
+            from .sandbox import ExampleRunner
+            
+            runner = ExampleRunner()
+            examples = runner.discover_examples()
+            
+            example = next((ex for ex in examples if ex.name == name), None)
+            if not example:
+                raise HTTPException(status_code=404, detail=f"Example not found: {name}")
+            
+            return {
+                "name": example.name,
+                "title": example.title,
+                "description": example.description,
+                "category": example.category,
+                "code": example.code
+            }
+        
+        @self.app.post("/api/examples/{name}/run", tags=["playground"])
+        async def run_example(name: str):
+            """Execute example and return output."""
+            from .sandbox import ExampleRunner
+            
+            runner = ExampleRunner()
+            result = runner.run(name, timeout=30)
+            
+            return result
+        
+        @self.app.get("/api/examples/{name}/steps", tags=["playground"])
+        async def get_example_steps(name: str):
+            """Get step-by-step guide for example."""
+            from .sandbox import ExampleRunner
+            
+            runner = ExampleRunner()
+            examples = runner.discover_examples()
+            
+            example = next((ex for ex in examples if ex.name == name), None)
+            if not example:
+                raise HTTPException(status_code=404, detail=f"Example not found: {name}")
+            
+            steps = runner.get_steps(example.code)
+            
+            return {"steps": steps}
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs):
         """Run the server.

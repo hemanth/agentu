@@ -99,6 +99,36 @@ print(results.to_json())  # Export for CI/CD
 
 Outputs color-coded results and exports JSON for continuous integration.
 
+## Ralph Mode: Autonomous Loops
+
+**NEW in v1.6.0**: Run agents in continuous autonomous loops.
+
+Inspired by [ghuntley.com/ralph](https://ghuntley.com/ralph) - a technique for running AI agents that work toward a goal without constant supervision.
+
+```python
+# Define your goal in a PROMPT.md file with checkpoints
+result = await agent.ralph(
+    prompt_file="PROMPT.md",
+    max_iterations=50,
+    timeout_minutes=30
+)
+
+print(f"Completed in {result['iterations']} iterations")
+```
+
+**PROMPT.md format:**
+```markdown
+# Goal
+Build a REST API for user auth.
+
+## Checkpoints
+- [ ] Create user model
+- [ ] Implement login endpoint
+- [ ] Add tests
+```
+
+The agent loops until all checkpoints are complete or limits are reached.
+
 ## Observability: Track Everything
 
 **NEW in v1.5.0**: Built-in monitoring for debugging and production.
