@@ -800,3 +800,41 @@ Example response for calculator:
         context_parts.append("Continue with the task. What tool should be used next?")
         
         return "\n".join(context_parts)
+
+    async def ralph(
+        self,
+        prompt_file: str,
+        max_iterations: int = 50,
+        timeout_minutes: int = 30,
+        checkpoint_every: int = 5,
+        on_iteration=None
+    ):
+        """Run agent in Ralph mode (autonomous loop).
+        
+        Ralph continuously reads a prompt file and executes until
+        all checkpoints are complete or limits are reached.
+        
+        Args:
+            prompt_file: Path to PROMPT.md file with goal and checkpoints
+            max_iterations: Maximum loop iterations (safety limit)
+            timeout_minutes: Maximum runtime in minutes
+            checkpoint_every: Save state every N iterations
+            on_iteration: Optional callback(iteration, result_dict)
+            
+        Returns:
+            Execution summary dict
+            
+        Example:
+            >>> result = await agent.ralph("PROMPT.md", max_iterations=50)
+        """
+        from .ralph import RalphRunner, RalphConfig
+        
+        config = RalphConfig(
+            prompt_file=prompt_file,
+            max_iterations=max_iterations,
+            timeout_minutes=timeout_minutes,
+            checkpoint_every=checkpoint_every
+        )
+        
+        runner = RalphRunner(self, config)
+        return await runner.run(on_iteration=on_iteration)
