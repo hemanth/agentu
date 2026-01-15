@@ -262,3 +262,76 @@ async def ralph(
     
     runner = RalphRunner(agent, config)
     return await runner.run(on_iteration=on_iteration)
+
+
+async def ralph_resume(
+    agent,
+    checkpoint_file: str,
+    max_iterations: Optional[int] = None,
+    timeout_minutes: int = 30,
+    on_iteration: Optional[Callable[[int, Dict], None]] = None
+) -> Dict[str, Any]:
+    """
+    Resume a Ralph loop from a checkpoint file.
+    
+    Args:
+        agent: The Agent instance to run
+        checkpoint_file: Path to .ralph_checkpoint.json file
+        max_iterations: Remaining iterations (None = continue with original limit)
+        timeout_minutes: Maximum runtime in minutes
+        on_iteration: Optional callback for progress reporting
+        
+    Returns:
+        Execution summary dict
+        
+    Example:
+        >>> from agentu import Agent, ralph_resume
+        >>> agent = Agent("builder").with_tools([...])
+        >>> result = await ralph_resume(agent, ".ralph_checkpoint.json")
+    """
+    import json
+    from pathlib import Path
+    
+    # Load checkpoint
+    checkpoint_path = Path(checkpoint_file)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
+    
+    checkpoint_data = json.loads(checkpoint_path.read_text())
+    
+    # Determine prompt file from checkpoint location
+    prompt_file = checkpoint_path.parent / "PROMPT.md"
+    if not prompt_file.exists():
+        # Try common alternatives
+        for alt in ["prompt.md", "TASK.md", "task.md"]:
+            alt_path = checkpoint_path.parent / alt
+            if alt_path.exists():
+                prompt_file = alt_path
+                break
+    
+    if not prompt_file.exists():
+        raise FileNotFoundError("Could not find prompt file near checkpoint")
+    
+    # Calculate remaining iterations
+    completed = checkpoint_data.get("iteration", 0)
+    remaining = max_iterations if max_iterations else (50 - completed)
+    
+    logger.info(f"Ralph Resume: Continuing from iteration {completed}, {remaining} remaining")
+    
+    # Create config and runner
+    config = RalphConfig(
+        prompt_file=str(prompt_file),
+        max_iterations=remaining,
+        timeout_minutes=timeout_minutes,
+        checkpoint_every=5
+    )
+    
+    runner = RalphRunner(agent, config)
+    
+    # Restore state
+    runner.state.iteration = completed
+    runner.state.checkpoints_completed = checkpoint_data.get("checkpoints_completed", [])
+    runner.state.errors = checkpoint_data.get("errors", [])
+    runner.state.last_result = checkpoint_data.get("last_result")
+    
+    return await runner.run(on_iteration=on_iteration)

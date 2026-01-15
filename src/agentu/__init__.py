@@ -12,10 +12,12 @@ from .memory_storage import MemoryStorage, JSONStorage, SQLiteStorage, create_st
 from .serve import serve, AgentServer
 from .session import Session, SessionManager
 from .eval import evaluate, EvalResult, FailedCase
-from .ralph import ralph, RalphRunner, RalphConfig
+from .ralph import ralph, ralph_resume, RalphRunner, RalphConfig
+from .cache import LLMCache, CacheStats
+from .workflow import Step, SequentialStep, ParallelStep, WorkflowCheckpoint, resume_workflow
 from . import observe
 
-__version__ = "1.6.1"
+__version__ = "1.7.0"
 __all__ = [
     "Agent",
     "Tool",
@@ -45,7 +47,15 @@ __all__ = [
     "EvalResult",
     "FailedCase",
     "ralph",
+    "ralph_resume",
     "RalphRunner",
     "RalphConfig",
+    "LLMCache",
+    "CacheStats",
+    "Step",
+    "SequentialStep",
+    "ParallelStep",
+    "WorkflowCheckpoint",
+    "resume_workflow",
     "observe",
 ]

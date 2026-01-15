@@ -14,6 +14,7 @@ from .memory import Memory
 from .workflow import Step
 from .skill import Skill
 from .observe import Observer, EventType, get_config
+from .cache import LLMCache
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,7 +64,8 @@ class Agent:
                  enable_memory: bool = True, memory_path: Optional[str] = None,
                  short_term_size: int = 10, use_sqlite: bool = True,
                  priority: int = 5, api_base: str = "http://localhost:11434/v1",
-                 api_key: Optional[str] = None, max_turns: int = 10):
+                 api_key: Optional[str] = None, max_turns: int = 10,
+                 cache: bool = False, cache_ttl: int = 3600):
         """Initialize an Agent.
 
         Args:
@@ -80,6 +82,8 @@ class Agent:
             api_base: Base URL for OpenAI-compatible API (default: http://localhost:11434/v1 for Ollama)
             api_key: Optional API key for authentication
             max_turns: Maximum turns for multi-turn inference (default: 10)
+            cache: Enable LLM response caching (default: False)
+            cache_ttl: Cache time-to-live in seconds (default: 3600 = 1 hour)
         """
         self.name = name
         self.api_base = api_base.rstrip('/')
@@ -120,6 +124,10 @@ class Agent:
             output=output_format,
             enabled=enabled
         )
+        
+        # Initialize cache if enabled
+        self.cache_enabled = cache
+        self.cache = LLMCache(ttl=cache_ttl) if cache else None
 
         # Load MCP tools if requested
         if load_mcp_tools and mcp_config_path:
@@ -511,6 +519,13 @@ class Agent:
 
     async def _call_llm(self, prompt: str) -> str:
         """Make an async API call to OpenAI-compatible endpoint."""
+        # Check cache first if enabled
+        if self.cache_enabled and self.cache:
+            cached = self.cache.get(prompt, self.model, temperature=self.temperature)
+            if cached is not None:
+                logger.debug(f"Cache hit for prompt (len={len(prompt)})")
+                return cached
+        
         with self.observer.trace(
             EventType.LLM_REQUEST,
             {"model": self.model, "prompt_length": len(prompt)}
@@ -544,6 +559,10 @@ class Agent:
                         if not full_response:
                             logger.error("Empty response from API")
                             raise Exception("Empty response from API")
+
+                        # Store in cache if enabled
+                        if self.cache_enabled and self.cache:
+                            self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
 
                         return full_response
 

@@ -5,6 +5,30 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-01-15
+
+### Added
+- **LLM Response Caching**: Transparent caching with TTL for faster responses and cost savings
+  - `LLMCache` class with SQLite storage
+  - Exact match using SHA256 hash of prompt + model + temperature
+  - Configurable TTL (default: 1 hour)
+  - Cache stats (hits, misses, hit rate)
+  - `agent = Agent("name", cache=True, cache_ttl=3600)`
+- **Workflow Checkpoint/Resume**: Resume interrupted workflows from last step
+  - `workflow.run(checkpoint="./checkpoints")` to enable checkpointing
+  - `resume_workflow("./checkpoints/workflow_abc.json")` to resume
+  - `WorkflowCheckpoint` dataclass for state tracking
+  - Automatic checkpoint after each sequential step
+- **Ralph Resume**: Continue Ralph loops from checkpoint
+  - `ralph_resume(agent, ".ralph_checkpoint.json")` 
+  - Restores iteration count, errors, and last result
+- `CacheStats` dataclass for cache statistics
+- 23 new tests for caching and resume functionality
+
+### Changed
+- Bumped version to 1.7.0
+- Added `LLMCache`, `CacheStats`, `WorkflowCheckpoint`, `resume_workflow`, `ralph_resume` to exports
+
 ## [1.6.1] - 2026-01-09
 
 ### Added

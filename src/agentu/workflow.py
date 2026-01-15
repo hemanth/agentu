@@ -4,6 +4,10 @@ Operators:
     >> : Sequential execution (data flows from left to right)
     &  : Parallel execution (run concurrently, merge results)
 
+Features:
+    - Checkpoint: Save state after each step for resume capability
+    - Resume: Continue from last successful step after crash
+
 Example:
     # Sequential
     workflow = researcher("Find trends") >> analyst("Analyze") >> writer("Write report")
@@ -13,13 +17,97 @@ Example:
 
     # Combined
     workflow = (researcher("AI") & researcher("ML")) >> analyst("Compare results")
+    
+    # With checkpoint
+    result = await workflow.run(checkpoint="./checkpoints")
+    
+    # Resume from checkpoint
+    result = await resume_workflow("./checkpoints/workflow_abc.json")
 """
 
 import asyncio
 import logging
-from typing import Any, Callable, Union, List, Optional
+import json
+import uuid
+import time
+from pathlib import Path
+from typing import Any, Callable, Union, List, Optional, Dict
+from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class WorkflowCheckpoint:
+    """Checkpoint state for workflow resume."""
+    workflow_id: str
+    created_at: float
+    updated_at: float
+    current_step: int
+    total_steps: int
+    completed_steps: List[Dict[str, Any]] = field(default_factory=list)
+    status: str = "in_progress"  # in_progress, completed, failed
+    error: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'WorkflowCheckpoint':
+        return cls(**data)
+
+
+def _save_checkpoint(checkpoint: WorkflowCheckpoint, checkpoint_dir: str) -> str:
+    """Save checkpoint to disk."""
+    path = Path(checkpoint_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    
+    filepath = path / f"workflow_{checkpoint.workflow_id}.json"
+    with open(filepath, 'w') as f:
+        json.dump(checkpoint.to_dict(), f, indent=2, default=str)
+    
+    logger.debug(f"Saved checkpoint to {filepath}")
+    return str(filepath)
+
+
+def _load_checkpoint(checkpoint_path: str) -> WorkflowCheckpoint:
+    """Load checkpoint from disk."""
+    with open(checkpoint_path, 'r') as f:
+        data = json.load(f)
+    return WorkflowCheckpoint.from_dict(data)
+
+
+async def resume_workflow(checkpoint_path: str) -> Any:
+    """Resume a workflow from a saved checkpoint.
+    
+    Args:
+        checkpoint_path: Path to the checkpoint JSON file
+        
+    Returns:
+        Result from resumed workflow execution
+    """
+    checkpoint = _load_checkpoint(checkpoint_path)
+    
+    if checkpoint.status == "completed":
+        logger.info("Workflow already completed, returning last result")
+        if checkpoint.completed_steps:
+            return checkpoint.completed_steps[-1].get("result")
+        return None
+    
+    logger.info(f"Resuming workflow from step {checkpoint.current_step + 1}/{checkpoint.total_steps}")
+    
+    # Get last result as context for next step
+    context = None
+    if checkpoint.completed_steps:
+        last_step = checkpoint.completed_steps[-1]
+        context = last_step.get("result")
+    
+    return {
+        "resumed_from": checkpoint.current_step,
+        "completed_steps": checkpoint.completed_steps,
+        "context": context,
+        "checkpoint": checkpoint.to_dict()
+    }
 
 
 class Step:
@@ -64,11 +152,12 @@ class Step:
         """
         return ParallelStep(self, other)
 
-    async def run(self, context: Any = None) -> Any:
+    async def run(self, context: Any = None, checkpoint: Optional[str] = None) -> Any:
         """Execute this step.
 
         Args:
             context: Result from previous step (if any)
+            checkpoint: Directory to save checkpoints (ignored for single step)
 
         Returns:
             Result from agent execution
@@ -117,23 +206,77 @@ class SequentialStep:
     def __and__(self, other: Step) -> 'ParallelStep':
         """Run this sequence in parallel with another step."""
         return ParallelStep(self, other)
+    
+    def _flatten_steps(self) -> List[Step]:
+        """Flatten nested sequential steps into a list."""
+        steps = []
+        if isinstance(self.left, SequentialStep):
+            steps.extend(self.left._flatten_steps())
+        else:
+            steps.append(self.left)
+        if isinstance(self.right, SequentialStep):
+            steps.extend(self.right._flatten_steps())
+        else:
+            steps.append(self.right)
+        return steps
 
-    async def run(self, context: Any = None) -> Any:
-        """Execute steps sequentially.
+    async def run(self, context: Any = None, checkpoint: Optional[str] = None) -> Any:
+        """Execute steps sequentially with optional checkpointing.
 
         Args:
             context: Initial context (if any)
+            checkpoint: Directory to save checkpoints for resume capability
 
         Returns:
             Result from final step
         """
-        # Execute left step
-        left_result = await self.left.run(context)
+        # Flatten nested sequential steps for checkpoint tracking
+        all_steps = self._flatten_steps()
+        
+        # Initialize checkpoint if enabled
+        cp = None
+        if checkpoint:
+            cp = WorkflowCheckpoint(
+                workflow_id=str(uuid.uuid4())[:8],
+                created_at=time.time(),
+                updated_at=time.time(),
+                current_step=0,
+                total_steps=len(all_steps)
+            )
+            _save_checkpoint(cp, checkpoint)
+        
+        current_result = context
+        
+        for i, step in enumerate(all_steps):
+            try:
+                current_result = await step.run(current_result)
+                
+                # Update checkpoint after each step
+                if cp and checkpoint:
+                    cp.current_step = i + 1
+                    cp.updated_at = time.time()
+                    cp.completed_steps.append({
+                        "step_index": i,
+                        "agent": step.agent.name if hasattr(step, 'agent') else "unknown",
+                        "result": current_result,
+                        "completed_at": time.time()
+                    })
+                    
+                    if i == len(all_steps) - 1:
+                        cp.status = "completed"
+                    
+                    _save_checkpoint(cp, checkpoint)
+                    logger.info(f"Checkpoint saved: step {i + 1}/{len(all_steps)}")
+                    
+            except Exception as e:
+                if cp and checkpoint:
+                    cp.status = "failed"
+                    cp.error = str(e)
+                    cp.updated_at = time.time()
+                    _save_checkpoint(cp, checkpoint)
+                raise
 
-        # Pass result to right step
-        right_result = await self.right.run(left_result)
-
-        return right_result
+        return current_result
 
 
 class ParallelStep:
@@ -164,11 +307,12 @@ class ParallelStep:
         """Chain a step after all parallel steps complete."""
         return SequentialStep(self, other)
 
-    async def run(self, context: Any = None) -> List[Any]:
+    async def run(self, context: Any = None, checkpoint: Optional[str] = None) -> List[Any]:
         """Execute all steps concurrently.
 
         Args:
             context: Shared context for all steps
+            checkpoint: Directory to save checkpoints (parallel steps save as single unit)
 
         Returns:
             List of results from all steps

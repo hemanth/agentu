@@ -50,6 +50,40 @@ memories = agent.recall(query="email")
 
 Stored in SQLite. Searchable. Persistent.
 
+## Caching: Save Time & Money
+
+**NEW in v1.7.0**: Transparent LLM response caching with TTL.
+
+```python
+# Enable caching with 1 hour TTL
+agent = Agent("assistant", cache=True)
+agent = Agent("assistant", cache=True, cache_ttl=7200)  # 2 hours
+
+# Same prompt = cache hit, no API call
+await agent.infer("What is Python?")  # API call, cached
+await agent.infer("What is Python?")  # Instant cache hit!
+
+# Check stats
+print(agent.cache.get_stats())  # {"hits": 10, "misses": 5, "hit_rate": 0.667}
+```
+
+Uses SQLite. Exact match on prompt + model + temperature.
+
+## Workflow Resume
+
+**NEW in v1.7.0**: Resume interrupted workflows from the last step.
+
+```python
+from agentu import resume_workflow
+
+# Run with checkpoints
+workflow = researcher("Find") >> analyst("Analyze") >> writer("Write")
+result = await workflow.run(checkpoint="./checkpoints")
+
+# After crash, resume from last successful step
+result = await resume_workflow("./checkpoints/workflow_abc.json")
+```
+
 ## Sessions: Stateful Intelligence
 
 **NEW in v1.3.0**: Server-managed conversations that remember everything.
@@ -103,18 +137,19 @@ Outputs color-coded results and exports JSON for continuous integration.
 
 **NEW in v1.6.0**: Run agents in continuous autonomous loops.
 
-Inspired by [ghuntley.com/ralph](https://ghuntley.com/ralph) - a technique for running AI agents that work toward a goal without constant supervision.
-
 ```python
 # Define your goal in a PROMPT.md file with checkpoints
 result = await agent.ralph(
     prompt_file="PROMPT.md",
     max_iterations=50,
-    timeout_minutes=30
+    timeout_minutes=30,
+    on_iteration=lambda i, data: print(f"[{i}] {data['result'][:50]}...")
 )
 
 print(f"Completed in {result['iterations']} iterations")
 ```
+
+**Progress tracking:** Use `on_iteration` callback to monitor each loop.
 
 **PROMPT.md format:**
 ```markdown

@@ -167,7 +167,7 @@ class TestAgentInstrumentation:
         # Should have start and end events
         start_events = [
             e for e in test_agent.observer.events
-            if e.event_type == Event Type.INFERENCE_START
+            if e.event_type == EventType.INFERENCE_START
         ]
         end_events = [
             e for e in test_agent.observer.events
