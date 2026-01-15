@@ -220,30 +220,39 @@ class SequentialStep:
             steps.append(self.right)
         return steps
 
-    async def run(self, context: Any = None, checkpoint: Optional[str] = None) -> Any:
+    async def run(
+        self, 
+        context: Any = None, 
+        checkpoint: Optional[str] = None,
+        workflow_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Execute steps sequentially with optional checkpointing.
 
         Args:
             context: Initial context (if any)
             checkpoint: Directory to save checkpoints for resume capability
+            workflow_id: Custom workflow ID (default: auto-generated UUID)
 
         Returns:
-            Result from final step
+            Dict with 'result' and optionally 'checkpoint_path'
         """
         # Flatten nested sequential steps for checkpoint tracking
         all_steps = self._flatten_steps()
         
         # Initialize checkpoint if enabled
         cp = None
+        checkpoint_path = None
         if checkpoint:
+            wf_id = workflow_id or str(uuid.uuid4())[:8]
             cp = WorkflowCheckpoint(
-                workflow_id=str(uuid.uuid4())[:8],
+                workflow_id=wf_id,
                 created_at=time.time(),
                 updated_at=time.time(),
                 current_step=0,
                 total_steps=len(all_steps)
             )
-            _save_checkpoint(cp, checkpoint)
+            checkpoint_path = _save_checkpoint(cp, checkpoint)
+            logger.info(f"Workflow checkpoint: {checkpoint_path}")
         
         current_result = context
         
@@ -265,7 +274,7 @@ class SequentialStep:
                     if i == len(all_steps) - 1:
                         cp.status = "completed"
                     
-                    _save_checkpoint(cp, checkpoint)
+                    checkpoint_path = _save_checkpoint(cp, checkpoint)
                     logger.info(f"Checkpoint saved: step {i + 1}/{len(all_steps)}")
                     
             except Exception as e:
@@ -276,6 +285,9 @@ class SequentialStep:
                     _save_checkpoint(cp, checkpoint)
                 raise
 
+        # Return result with checkpoint path if enabled
+        if checkpoint_path:
+            return {"result": current_result, "checkpoint_path": checkpoint_path}
         return current_result
 
 
