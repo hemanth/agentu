@@ -76,12 +76,15 @@ Uses SQLite. Exact match on prompt + model + temperature.
 ```python
 from agentu import resume_workflow
 
-# Run with checkpoints
+# Run with checkpoints (use custom workflow_id for easy identification)
 workflow = researcher("Find") >> analyst("Analyze") >> writer("Write")
-result = await workflow.run(checkpoint="./checkpoints")
+result = await workflow.run(checkpoint="./checkpoints", workflow_id="my-report")
+
+# checkpoint_path is returned for easy resume
+print(result["checkpoint_path"])  # ./checkpoints/workflow_my-report.json
 
 # After crash, resume from last successful step
-result = await resume_workflow("./checkpoints/workflow_abc.json")
+await resume_workflow(result["checkpoint_path"])
 ```
 
 ## Sessions: Stateful Intelligence

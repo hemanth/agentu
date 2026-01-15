@@ -158,19 +158,35 @@ class TestSequentialStepWithCheckpoint:
         workflow = step1 >> step2
         
         checkpoint_dir = str(tmp_path / "checkpoints")
-        await workflow.run(checkpoint=checkpoint_dir)
+        result = await workflow.run(checkpoint=checkpoint_dir)
         
-        # Check that checkpoint file was created
-        checkpoint_files = list(Path(checkpoint_dir).glob("workflow_*.json"))
-        assert len(checkpoint_files) == 1
+        # Result should include checkpoint_path
+        assert "checkpoint_path" in result
+        assert "result" in result
+        assert Path(result["checkpoint_path"]).exists()
         
         # Load and verify
-        with open(checkpoint_files[0]) as f:
+        with open(result["checkpoint_path"]) as f:
             data = json.load(f)
         
         assert data["status"] == "completed"
         assert data["current_step"] == 2
         assert len(data["completed_steps"]) == 2
+    
+    @pytest.mark.asyncio
+    async def test_sequential_with_custom_workflow_id(self, mock_agent, tmp_path):
+        """Test that custom workflow_id is used in checkpoint filename."""
+        step1 = Step(mock_agent, "task1")
+        step2 = Step(mock_agent, "task2")
+        
+        workflow = step1 >> step2
+        
+        checkpoint_dir = str(tmp_path / "checkpoints")
+        result = await workflow.run(checkpoint=checkpoint_dir, workflow_id="my-custom-id")
+        
+        # Verify custom ID is in the path
+        assert "my-custom-id" in result["checkpoint_path"]
+        assert Path(result["checkpoint_path"]).exists()
 
 
 class TestStepWithCheckpoint:
