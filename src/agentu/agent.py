@@ -12,7 +12,7 @@ from .mcp_config import load_mcp_servers
 from .mcp_tool import MCPToolManager
 from .memory import Memory
 from .workflow import Step
-from .skill import Skill
+from .skill import Skill, load_skill
 from .observe import Observer, EventType, get_config
 from .cache import LLMCache
 
@@ -329,7 +329,7 @@ class Agent:
         """Close all MCP server connections."""
         self.mcp_manager.close_all()
 
-    def with_skills(self, skills: List[Skill]) -> 'Agent':
+    def with_skills(self, skills: List[Union[Skill, str]], skill_ttl: Optional[int] = 86400) -> 'Agent':
         """Add agent skills with progressive loading.
         
         Skills use a 3-level loading system:
@@ -338,25 +338,45 @@ class Agent:
         - Level 3: Resources (loaded on-demand)
         
         Args:
-            skills: List of Skill objects to add
+            skills: List of Skill objects, GitHub URLs, or local paths
+            skill_ttl: Cache time-to-live in seconds for GitHub skills (default: 86400 = 24 hours)
+                       None means cache forever, 0 means always fetch fresh
             
         Returns:
             Self for method chaining
             
         Example:
-            >>> from pathlib import Path
+            >>> # From GitHub URL (auto-refreshes every 24 hours)
+            >>> agent = Agent("assistant").with_skills([
+            ...     "https://github.com/hemanth/agentu-skills/tree/main/pdf-processor"
+            ... ])
+            
+            >>> # Custom TTL (refresh every hour)
+            >>> agent = Agent("assistant").with_skills([...], skill_ttl=3600)
+            
+            >>> # Cache forever (never auto-refresh)
+            >>> agent = Agent("assistant").with_skills([...], skill_ttl=None)
+            
+            >>> # Always fetch fresh
+            >>> agent = Agent("assistant").with_skills([...], skill_ttl=0)
+            
+            >>> # From local path
+            >>> agent = Agent("assistant").with_skills(["./skills/my-skill"])
+            
+            >>> # Using Skill object directly
             >>> pdf_skill = Skill(
             ...     name="pdf-processing",
             ...     description="Extract text and tables from PDF files",
-            ...     instructions=Path("skills/pdf/SKILL.md"),
-            ...     resources={"forms": Path("skills/pdf/FORMS.md")}
+            ...     instructions="skills/pdf/SKILL.md"
             ... )
             >>> agent = Agent("assistant").with_skills([pdf_skill])
         """
-        self.skills.extend(skills)
+        # Resolve all skills (strings become Skill objects)
+        resolved_skills = [load_skill(s, ttl=skill_ttl) for s in skills]
+        self.skills.extend(resolved_skills)
         
         # Auto-add get_skill_resource tool if not present
-        if skills and not any(t.name == "get_skill_resource" for t in self.tools):
+        if resolved_skills and not any(t.name == "get_skill_resource" for t in self.tools):
             def get_skill_resource(skill_name: str, resource_key: str) -> str:
                 """Load a skill resource file on-demand.
                 
@@ -381,9 +401,9 @@ class Agent:
                 description="Load additional documentation or resources from an activated skill",
                 name="get_skill_resource"
             ))
-            logger.info(f"Added get_skill_resource tool for {len(skills)} skills")
+            logger.info(f"Added get_skill_resource tool for {len(resolved_skills)} skills")
         
-        logger.info(f"Added {len(skills)} skills to agent {self.name}")
+        logger.info(f"Added {len(resolved_skills)} skills to agent {self.name}")
         return self
 
     def __call__(self, task: Union[str, Callable]) -> Step:

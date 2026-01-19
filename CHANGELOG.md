@@ -5,6 +5,35 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-01-18
+
+### Added
+- **Skill TTL (Time-to-Live)**: Auto-refresh cached GitHub skills after expiration
+  - `with_skills([...], skill_ttl=86400)` - default 24 hours
+  - `skill_ttl=None` - cache forever (never refresh)
+  - `skill_ttl=0` - always fetch fresh
+  - Cache metadata stored in `.cache_meta` file
+- `load_skill()` now accepts optional `ttl` parameter
+
+### Changed
+- GitHub skills now auto-refresh when cache expires instead of caching forever
+
+## [1.8.0] - 2026-01-17
+
+### Added
+- **GitHub Skills Import**: Load reusable skills directly from GitHub URLs
+  - `with_skills(["https://github.com/user/repo/tree/main/skill-name"])`
+  - Supports HTTPS URLs and SSH format (`git@github.com:...`)
+  - Version/branch support: `/tree/v1.0/skill-name`
+  - Local caching at `~/.agentu/skills/`
+  - Auto-detect skill metadata from `skill.json` or directory name
+- `load_skill()` function for programmatic skill loading
+- 15 new tests for GitHub skill parsing, fetching, and caching
+
+### Changed
+- `with_skills()` now accepts both `Skill` objects and strings (URLs or local paths)
+- `requires-python` updated from `>=3.7` to `>=3.9`
+
 ## [1.7.1] - 2026-01-15
 
 ### Fixed

@@ -87,6 +87,36 @@ print(result["checkpoint_path"])  # ./checkpoints/workflow_my-report.json
 await resume_workflow(result["checkpoint_path"])
 ```
 
+## GitHub Skills
+
+**NEW in v1.8.0**: Import reusable skills directly from GitHub.
+
+```python
+# Load skills from GitHub URLs
+agent = Agent("assistant").with_skills([
+    "https://github.com/hemanth/agentu-skills/tree/main/pdf-processor",
+    "https://github.com/openai/skills/tree/v1.0/code-review",
+])
+
+# Or from local paths
+agent = Agent("assistant").with_skills(["./skills/my-skill"])
+
+# Or mix both
+agent = Agent("assistant").with_skills([
+    "https://github.com/hemanth/skills/tree/main/web-scraper",
+    "./local/custom-skill",
+])
+```
+
+Skills are cached locally at `~/.agentu/skills/`. Structure:
+
+```
+my-skill/
+├── skill.json        # {"name": "...", "description": "..."}
+├── SKILL.md          # Instructions loaded when triggered
+└── resources/        # On-demand resources
+```
+
 ## Sessions: Stateful Intelligence
 
 **NEW in v1.3.0**: Server-managed conversations that remember everything.

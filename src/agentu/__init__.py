@@ -2,7 +2,7 @@
 
 from .agent import Agent
 from .tools import Tool
-from .skill import Skill
+from .skill import Skill, load_skill
 from .search import SearchAgent, search_tool
 from .mcp_config import MCPConfigLoader, load_mcp_servers
 from .mcp_transport import MCPServerConfig, AuthConfig, TransportType
@@ -17,11 +17,12 @@ from .cache import LLMCache, CacheStats
 from .workflow import Step, SequentialStep, ParallelStep, WorkflowCheckpoint, resume_workflow
 from . import observe
 
-__version__ = "1.7.1"
+__version__ = "1.8.0"
 __all__ = [
     "Agent",
     "Tool",
     "Skill",
+    "load_skill",
     "SearchAgent",
     "search_tool",
     "MCPConfigLoader",

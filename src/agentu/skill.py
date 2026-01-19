@@ -7,9 +7,239 @@ Skills provide domain-specific expertise through a 3-level loading system:
 - Level 3: Resources (loaded on-demand)
 """
 
+import json
+import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union
+from urllib.request import urlopen
+from urllib.error import URLError
+
+logger = logging.getLogger(__name__)
+
+# Cache directory for GitHub skills
+SKILL_CACHE_DIR = Path.home() / ".agentu" / "skills"
+
+
+def _parse_github_url(url: str) -> tuple:
+    """Parse GitHub URL to extract owner, repo, branch, and path.
+    
+    Supports formats:
+    - https://github.com/owner/repo/tree/branch/path/to/skill
+    - https://github.com/owner/repo/tree/main/skill-name
+    - git@github.com:owner/repo.git/path (SSH format)
+    
+    Returns:
+        Tuple of (owner, repo, branch, path)
+    """
+    # HTTPS format: https://github.com/owner/repo/tree/branch/path
+    https_pattern = r'https://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)'
+    match = re.match(https_pattern, url)
+    if match:
+        return match.groups()
+    
+    # Short HTTPS without tree: https://github.com/owner/repo/path
+    short_pattern = r'https://github\.com/([^/]+)/([^/]+)/(?!tree)(.+)'
+    match = re.match(short_pattern, url)
+    if match:
+        owner, repo, path = match.groups()
+        return (owner, repo, 'main', path)
+    
+    # SSH format: git@github.com:owner/repo.git/path
+    ssh_pattern = r'git@github\.com:([^/]+)/([^/]+?)(?:\.git)?/(.+)'
+    match = re.match(ssh_pattern, url)
+    if match:
+        owner, repo, path = match.groups()
+        return (owner, repo, 'main', path)
+    
+    raise ValueError(f"Could not parse GitHub URL: {url}")
+
+
+def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
+    """Fetch a skill from GitHub and cache it locally.
+    
+    Args:
+        url: GitHub URL to the skill directory
+        ttl: Cache time-to-live in seconds (default: 86400 = 24 hours)
+             None means cache forever, 0 means always fetch fresh
+        
+    Returns:
+        Skill object loaded from GitHub
+    """
+    import time
+    
+    owner, repo, branch, path = _parse_github_url(url)
+    
+    # Create cache directory
+    cache_path = SKILL_CACHE_DIR / owner / repo / branch / path
+    cache_path.mkdir(parents=True, exist_ok=True)
+    
+    # Check if cache exists and is still valid
+    instructions_file = cache_path / "SKILL.md"
+    cache_meta_file = cache_path / ".cache_meta"
+    
+    should_fetch = True
+    if ttl is not None and ttl > 0 and instructions_file.exists() and cache_meta_file.exists():
+        try:
+            cache_time = float(cache_meta_file.read_text().strip())
+            age = time.time() - cache_time
+            if age < ttl:
+                should_fetch = False
+                logger.info(f"Using cached skill from {cache_path} (age: {int(age)}s, ttl: {ttl}s)")
+        except (ValueError, OSError):
+            pass  # Invalid cache meta, refetch
+    elif ttl is None and instructions_file.exists():
+        # TTL=None means cache forever
+        should_fetch = False
+        logger.info(f"Using forever-cached skill from {cache_path}")
+    
+    if not should_fetch:
+        # Load from cache
+        try:
+            skill_json_path = cache_path / "skill.json"
+            if skill_json_path.exists():
+                metadata = json.loads(skill_json_path.read_text())
+            else:
+                metadata = {
+                    "name": path.split("/")[-1],
+                    "description": f"Skill from {owner}/{repo}"
+                }
+            
+            # Load cached resources
+            resources = {}
+            if "resources" in metadata:
+                for key, resource_path in metadata["resources"].items():
+                    resource_file = cache_path / resource_path
+                    if resource_file.exists():
+                        resources[key] = str(resource_file)
+            
+            return Skill(
+                name=metadata.get("name", path.split("/")[-1]),
+                description=metadata.get("description", f"Skill from {owner}/{repo}"),
+                instructions=str(instructions_file),
+                resources=resources if resources else None,
+                _skip_validation=True
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load cached skill, refetching: {e}")
+            should_fetch = True
+    
+    # Fetch from GitHub
+    raw_base = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+    
+    # Fetch skill.json for metadata
+    skill_json_url = f"{raw_base}/skill.json"
+    skill_md_url = f"{raw_base}/SKILL.md"
+    
+    try:
+        # Try to fetch skill.json first
+        with urlopen(skill_json_url, timeout=10) as response:
+            metadata = json.loads(response.read().decode())
+            # Cache skill.json
+            (cache_path / "skill.json").write_text(json.dumps(metadata, indent=2))
+    except URLError:
+        # No skill.json, use defaults from path
+        metadata = {
+            "name": path.split("/")[-1],
+            "description": f"Skill from {owner}/{repo}"
+        }
+    
+    # Fetch SKILL.md instructions
+    try:
+        with urlopen(skill_md_url, timeout=10) as response:
+            instructions_content = response.read().decode()
+            instructions_file.write_text(instructions_content)
+            logger.info(f"Cached skill instructions: {instructions_file}")
+    except URLError as e:
+        raise FileNotFoundError(f"Could not fetch SKILL.md from {skill_md_url}: {e}")
+    
+    # Update cache metadata with current time
+    cache_meta_file.write_text(str(time.time()))
+    
+    # Fetch resources if specified in metadata
+    resources = {}
+    if "resources" in metadata:
+        for key, resource_path in metadata["resources"].items():
+            resource_url = f"{raw_base}/{resource_path}"
+            resource_file = cache_path / resource_path
+            resource_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with urlopen(resource_url, timeout=10) as response:
+                    resource_file.write_text(response.read().decode())
+                resources[key] = str(resource_file)
+                logger.info(f"Cached skill resource '{key}': {resource_file}")
+            except URLError:
+                logger.warning(f"Could not fetch resource '{key}' from {resource_url}")
+    
+    return Skill(
+        name=metadata.get("name", path.split("/")[-1]),
+        description=metadata.get("description", f"Skill from {owner}/{repo}"),
+        instructions=str(instructions_file),
+        resources=resources if resources else None,
+        _skip_validation=True  # Already validated during fetch
+    )
+
+
+def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skill':
+    """Load a skill from various sources.
+    
+    Args:
+        source: Either a Skill object, GitHub URL, or local path
+        ttl: Cache time-to-live in seconds for GitHub skills (default: 86400 = 24 hours)
+             None means cache forever, 0 means always fetch fresh
+        
+    Returns:
+        Skill object
+        
+    Examples:
+        >>> skill = load_skill("https://github.com/hemanth/agentu-skills/tree/main/pdf")
+        >>> skill = load_skill("./skills/my-skill")
+        >>> skill = load_skill(existing_skill_object)
+    """
+    if isinstance(source, Skill):
+        return source
+    
+    if not isinstance(source, str):
+        raise TypeError(f"Expected Skill or str, got {type(source)}")
+    
+    # GitHub URL
+    if source.startswith("https://github.com/") or source.startswith("git@github.com:"):
+        return _fetch_github_skill(source, ttl=ttl)
+    
+    # Local path - look for SKILL.md or skill.json
+    path = Path(source)
+    if not path.exists():
+        raise FileNotFoundError(f"Skill path not found: {path}")
+    
+    skill_md = path / "SKILL.md"
+    skill_json = path / "skill.json"
+    
+    if skill_json.exists():
+        metadata = json.loads(skill_json.read_text())
+    else:
+        metadata = {
+            "name": path.name,
+            "description": f"Local skill from {path}"
+        }
+    
+    if not skill_md.exists():
+        raise FileNotFoundError(f"SKILL.md not found in {path}")
+    
+    # Load resources
+    resources = {}
+    if "resources" in metadata:
+        for key, resource_path in metadata["resources"].items():
+            full_path = path / resource_path
+            if full_path.exists():
+                resources[key] = str(full_path)
+    
+    return Skill(
+        name=metadata.get("name", path.name),
+        description=metadata.get("description", f"Skill from {path}"),
+        instructions=str(skill_md),
+        resources=resources if resources else None
+    )
 
 
 @dataclass
@@ -33,14 +263,25 @@ class Skill:
         ...     instructions="skills/pdf/SKILL.md",
         ...     resources={"forms": "skills/pdf/FORMS.md"}
         ... )
+        
+        # Or load from GitHub:
+        >>> skill = load_skill("https://github.com/hemanth/agentu-skills/tree/main/pdf")
     """
     name: str
     description: str
     instructions: str
     resources: Optional[Dict[str, str]] = field(default_factory=dict)
+    _skip_validation: bool = field(default=False, repr=False)
     
     def __post_init__(self):
         """Convert string paths to Path objects and validate."""
+        # Skip validation for GitHub-fetched skills (already validated)
+        if self._skip_validation:
+            self.instructions = Path(self.instructions)
+            if self.resources:
+                self.resources = {k: Path(v) for k, v in self.resources.items()}
+            return
+            
         # Convert instructions string to Path
         self.instructions = Path(self.instructions)
         
