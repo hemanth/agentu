@@ -23,9 +23,11 @@ SKILL_CACHE_DIR = Path.home() / ".agentu" / "skills"
 
 
 def _parse_github_url(url: str) -> tuple:
-    """Parse GitHub URL to extract owner, repo, branch, and path.
+    """Parse GitHub URL or shorthand to extract owner, repo, branch, and path.
     
     Supports formats:
+    - owner/repo/path (shorthand, defaults to main branch)
+    - owner/repo/path@branch (shorthand with branch)
     - https://github.com/owner/repo/tree/branch/path/to/skill
     - https://github.com/owner/repo/tree/main/skill-name
     - git@github.com:owner/repo.git/path (SSH format)
@@ -53,7 +55,15 @@ def _parse_github_url(url: str) -> tuple:
         owner, repo, path = match.groups()
         return (owner, repo, 'main', path)
     
-    raise ValueError(f"Could not parse GitHub URL: {url}")
+    # Shorthand format: owner/repo/path or owner/repo/path@branch
+    # Must have at least 3 parts (owner/repo/path)
+    shorthand_pattern = r'^([^/@]+)/([^/@]+)/([^@]+?)(?:@([^/]+))?$'
+    match = re.match(shorthand_pattern, url)
+    if match:
+        owner, repo, path, branch = match.groups()
+        return (owner, repo, branch or 'main', path)
+    
+    raise ValueError(f"Could not parse GitHub URL or shorthand: {url}")
 
 
 def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
@@ -193,6 +203,8 @@ def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skil
         Skill object
         
     Examples:
+        >>> skill = load_skill("hemanth/agentu-skills/pdf-processor")  # shorthand
+        >>> skill = load_skill("owner/repo/skill@v1.0")  # with branch
         >>> skill = load_skill("https://github.com/hemanth/agentu-skills/tree/main/pdf")
         >>> skill = load_skill("./skills/my-skill")
         >>> skill = load_skill(existing_skill_object)
@@ -203,9 +215,17 @@ def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skil
     if not isinstance(source, str):
         raise TypeError(f"Expected Skill or str, got {type(source)}")
     
-    # GitHub URL
+    # GitHub URL (full URL format)
     if source.startswith("https://github.com/") or source.startswith("git@github.com:"):
         return _fetch_github_skill(source, ttl=ttl)
+    
+    # Check if it's a shorthand GitHub format (owner/repo/path) 
+    # Must have at least 2 slashes and not start with ./ or /
+    if not source.startswith(('./','/')):
+        parts = source.split('/')
+        if len(parts) >= 3:
+            # Looks like shorthand: owner/repo/path or owner/repo/path@branch
+            return _fetch_github_skill(source, ttl=ttl)
     
     # Local path - look for SKILL.md or skill.json
     path = Path(source)

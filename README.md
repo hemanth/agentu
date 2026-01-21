@@ -92,19 +92,18 @@ await resume_workflow(result["checkpoint_path"])
 **NEW in v1.8.0**: Import reusable skills directly from GitHub.
 
 ```python
-# Load skills from GitHub URLs
+# Shorthand format (recommended)
 agent = Agent("assistant").with_skills([
-    "https://github.com/hemanth/agentu-skills/tree/main/pdf-processor",
-    "https://github.com/openai/skills/tree/v1.0/code-review",
+    "hemanth/agentu-skills/pdf-processor",
+    "openai/skills/code-review@v1.0",  # with branch/tag
 ])
 
 # Or from local paths
 agent = Agent("assistant").with_skills(["./skills/my-skill"])
 
-# Or mix both
+# Full URLs also supported
 agent = Agent("assistant").with_skills([
     "https://github.com/hemanth/skills/tree/main/web-scraper",
-    "./local/custom-skill",
 ])
 ```
 

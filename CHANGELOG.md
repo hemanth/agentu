@@ -5,6 +5,14 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-01-20
+
+### Added
+- **Shorthand GitHub Skills**: Use `owner/repo/path` instead of full URLs
+  - `with_skills(["hemanth/agentu-skills/pdf-processor"])`
+  - Branch support: `owner/repo/path@branch`
+  - Full URLs still supported for backward compatibility
+
 ## [1.8.1] - 2026-01-18
 
 ### Added
