@@ -130,7 +130,11 @@ class MCPHTTPTransport(MCPTransport):
         return self.request_id
 
     def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Send MCP JSON-RPC request over HTTP."""
+        """Send MCP JSON-RPC request over HTTP.
+
+        Handles mcp-session-id header as per MCP Streamable HTTP transport spec.
+        The session ID is captured from the response and included in subsequent requests.
+        """
         if not self.config.url:
             raise ValueError("URL is required for HTTP transport")
 
@@ -144,13 +148,25 @@ class MCPHTTPTransport(MCPTransport):
             request_payload["params"] = params
 
         try:
+            headers = self._get_headers()
+
+            # Include session ID if we have one (per MCP Streamable HTTP spec)
+            if self.session_id:
+                headers["mcp-session-id"] = self.session_id
+
             logger.info(f"Sending MCP request to {self.config.url}: {method}")
             response = requests.post(
                 self.config.url,
                 json=request_payload,
-                headers=self._get_headers(),
+                headers=headers,
                 timeout=self.config.timeout
             )
+
+            # Capture session ID from response headers (per MCP Streamable HTTP spec)
+            if "mcp-session-id" in response.headers:
+                self.session_id = response.headers["mcp-session-id"]
+                logger.debug(f"Captured MCP session ID: {self.session_id}")
+
             response.raise_for_status()
 
             result = response.json()
