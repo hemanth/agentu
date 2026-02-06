@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentu"
-version = "1.8.3"
+version = "1.9.0"
 description = "A flexible Python package for creating AI agents with customizable tools"
 readme = "README.md"
 authors = [
@@ -16,14 +16,13 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 keywords = ["ai", "agents", "openai", "llm", "tools", "cli"]
 dependencies = [
-    "requests>=2.25.1",
     "aiohttp>=3.8.0",
     "duckduckgo-search>=4.1.1",
     "fastapi>=0.100.0",
@@ -31,6 +30,13 @@ dependencies = [
     "pydantic>=2.0.0",
 ]
 requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "httpx>=0.24.0",
+]
 
 [project.scripts]
 agentu = "agentu.cli:main"

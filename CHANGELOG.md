@@ -5,6 +5,27 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-02-06
+
+### Changed
+- **Async MCP Transport**: Replaced `requests` + `threading` with `aiohttp` + `asyncio` for non-blocking MCP communication
+- **Async Skill Fetching**: `load_skill()` and `_fetch_github_skill()` now async with `aiohttp`; concurrent loading via `asyncio.gather`
+- **Async File I/O**: Checkpoint and prompt file operations wrapped with `asyncio.to_thread()` in workflow, ralph, and serve modules
+- **LLM Session Reuse**: `_call_llm()` reuses a single `aiohttp.ClientSession` instead of creating one per call
+- **Non-blocking Memory**: `memory.remember()` calls in `infer()` wrapped with `asyncio.to_thread()` to avoid blocking on SQLite
+- **`with_mcp()`** and **`with_skills()`** are now async methods
+- Removed `requests` from dependencies (replaced entirely by `aiohttp`)
+- Updated Python version classifiers to 3.9-3.12
+
+### Added
+- `Agent.close()` method for proper async resource cleanup (LLM session + MCP connections)
+- `_get_llm_session()` for lazy aiohttp session creation and reuse
+- `[project.optional-dependencies] dev` with pytest, pytest-asyncio, httpx
+
+### Fixed
+- `Agent.recall()` now forwards `include_short_term` parameter to `Memory.recall()`
+- `_match_skills()` improved with bidirectional keyword matching and stem-based matching (5+ char common prefix)
+
 ## [1.8.2] - 2026-01-20
 
 ### Added
