@@ -205,8 +205,7 @@ class AgentServer:
             if not dashboard_path.exists():
                 raise HTTPException(status_code=404, detail="Dashboard not found")
             
-            with open(dashboard_path, 'r') as f:
-                html_content = f.read()
+            html_content = await asyncio.to_thread(dashboard_path.read_text)
             
             return HTMLResponse(content=html_content)
         
@@ -228,8 +227,7 @@ class AgentServer:
             if not playground_path.exists():
                 raise HTTPException(status_code=404, detail="Playground not found")
             
-            with open(playground_path, 'r') as f:
-                html_content = f.read()
+            html_content = await asyncio.to_thread(playground_path.read_text)
             
             return HTMLResponse(content=html_content)
         

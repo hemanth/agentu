@@ -77,6 +77,16 @@ def _load_checkpoint(checkpoint_path: str) -> WorkflowCheckpoint:
     return WorkflowCheckpoint.from_dict(data)
 
 
+async def _async_save_checkpoint(checkpoint: WorkflowCheckpoint, checkpoint_dir: str) -> str:
+    """Save checkpoint to disk without blocking the event loop."""
+    return await asyncio.to_thread(_save_checkpoint, checkpoint, checkpoint_dir)
+
+
+async def _async_load_checkpoint(checkpoint_path: str) -> WorkflowCheckpoint:
+    """Load checkpoint from disk without blocking the event loop."""
+    return await asyncio.to_thread(_load_checkpoint, checkpoint_path)
+
+
 async def resume_workflow(checkpoint_path: str) -> Any:
     """Resume a workflow from a saved checkpoint.
     
@@ -86,7 +96,7 @@ async def resume_workflow(checkpoint_path: str) -> Any:
     Returns:
         Result from resumed workflow execution
     """
-    checkpoint = _load_checkpoint(checkpoint_path)
+    checkpoint = await _async_load_checkpoint(checkpoint_path)
     
     if checkpoint.status == "completed":
         logger.info("Workflow already completed, returning last result")
@@ -251,7 +261,7 @@ class SequentialStep:
                 current_step=0,
                 total_steps=len(all_steps)
             )
-            checkpoint_path = _save_checkpoint(cp, checkpoint)
+            checkpoint_path = await _async_save_checkpoint(cp, checkpoint)
             logger.info(f"Workflow checkpoint: {checkpoint_path}")
         
         current_result = context
@@ -274,7 +284,7 @@ class SequentialStep:
                     if i == len(all_steps) - 1:
                         cp.status = "completed"
                     
-                    checkpoint_path = _save_checkpoint(cp, checkpoint)
+                    checkpoint_path = await _async_save_checkpoint(cp, checkpoint)
                     logger.info(f"Checkpoint saved: step {i + 1}/{len(all_steps)}")
                     
             except Exception as e:
@@ -282,7 +292,7 @@ class SequentialStep:
                     cp.status = "failed"
                     cp.error = str(e)
                     cp.updated_at = time.time()
-                    _save_checkpoint(cp, checkpoint)
+                    await _async_save_checkpoint(cp, checkpoint)
                 raise
 
         # Return result with checkpoint path if enabled

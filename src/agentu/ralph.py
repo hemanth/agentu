@@ -99,7 +99,7 @@ class RalphRunner:
                     break
                 
                 # Read prompt file (re-read each iteration to pick up changes)
-                prompt = self._read_prompt()
+                prompt = await self._async_read_prompt()
                 if prompt is None:
                     break
                     
@@ -114,7 +114,7 @@ class RalphRunner:
                     self.state.last_result = str(result)
                     
                     # Update state in prompt file
-                    self._update_prompt_state(prompt)
+                    await self._async_update_prompt_state(prompt)
                     
                 except Exception as e:
                     error_msg = f"Iteration {i+1}: {str(e)}"
@@ -134,7 +134,7 @@ class RalphRunner:
                 
                 # Checkpoint
                 if (i + 1) % self.config.checkpoint_every == 0:
-                    self._save_checkpoint()
+                    await asyncio.to_thread(self._save_checkpoint)
                     
         except KeyboardInterrupt:
             logger.info("Ralph: Interrupted by user")
@@ -152,6 +152,10 @@ class RalphRunner:
         except Exception as e:
             logger.error(f"Ralph: Error reading prompt: {e}")
             return None
+
+    async def _async_read_prompt(self) -> Optional[str]:
+        """Read the prompt file without blocking the event loop."""
+        return await asyncio.to_thread(self._read_prompt)
             
     def _check_completion(self, prompt: str) -> bool:
         """Check if all checkpoints in prompt are complete."""
@@ -198,6 +202,10 @@ Errors: {len(self.state.errors)}
             
         except Exception as e:
             logger.warning(f"Ralph: Could not update prompt state: {e}")
+
+    async def _async_update_prompt_state(self, original_prompt: str):
+        """Update prompt state without blocking the event loop."""
+        await asyncio.to_thread(self._update_prompt_state, original_prompt)
     
     def _save_checkpoint(self):
         """Save checkpoint to disk."""
