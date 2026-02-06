@@ -17,7 +17,7 @@ from .cache import LLMCache, CacheStats
 from .workflow import Step, SequentialStep, ParallelStep, WorkflowCheckpoint, resume_workflow
 from . import observe
 
-__version__ = "1.8.0"
+__version__ = "1.10.0"
 __all__ = [
     "Agent",
     "Tool",

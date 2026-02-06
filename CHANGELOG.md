@@ -5,6 +5,22 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-02-06
+
+### Added
+
+- **Streaming inference** via `agent.stream()` — async generator that yields text chunks in real-time
+- Internal `_stream_llm()` method using OpenAI-compatible SSE streaming (`stream: true`)
+- Streaming integrates with memory, cache, observer, and conversation history
+- 8 new streaming tests
+
+### Example
+
+```python
+async for chunk in agent.stream("Explain quantum computing"):
+    print(chunk, end="", flush=True)
+```
+
 ## [1.9.0] - 2026-02-06
 
 ### Changed
