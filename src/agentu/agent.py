@@ -1,4 +1,3 @@
-import requests
 import json
 import asyncio
 import aiohttp
@@ -20,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_ollama_models(api_base: str = "http://localhost:11434") -> List[str]:
+async def get_ollama_models(api_base: str = "http://localhost:11434") -> List[str]:
     """Get list of available Ollama models.
 
     Args:
@@ -30,11 +29,29 @@ def get_ollama_models(api_base: str = "http://localhost:11434") -> List[str]:
         List of model names, or empty list if unable to fetch
     """
     try:
-        response = requests.get(f"{api_base.rstrip('/')}/api/tags", timeout=2)
-        response.raise_for_status()
-        models_data = response.json()
-        models = [model["name"] for model in models_data.get("models", [])]
-        return models
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{api_base.rstrip('/')}/api/tags",
+                timeout=aiohttp.ClientTimeout(total=2)
+            ) as response:
+                response.raise_for_status()
+                models_data = await response.json()
+                models = [model["name"] for model in models_data.get("models", [])]
+                return models
+    except Exception as e:
+        logger.warning(f"Unable to fetch Ollama models: {e}")
+        return []
+
+
+def _get_ollama_models_sync(api_base: str = "http://localhost:11434") -> List[str]:
+    """Sync wrapper to get Ollama models (used during __init__)."""
+    try:
+        import urllib.request
+        import json as _json
+        req = urllib.request.Request(f"{api_base.rstrip('/')}/api/tags")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            models_data = _json.loads(resp.read())
+            return [model["name"] for model in models_data.get("models", [])]
     except Exception as e:
         logger.warning(f"Unable to fetch Ollama models: {e}")
         return []
@@ -49,7 +66,7 @@ def get_default_model(api_base: str = "http://localhost:11434") -> str:
     Returns:
         Model name (first available model, or "qwen3:latest" as fallback)
     """
-    models = get_ollama_models(api_base)
+    models = _get_ollama_models_sync(api_base)
     if models:
         logger.info(f"Available Ollama models: {models}")
         logger.info(f"Using default model: {models[0]}")
@@ -129,9 +146,11 @@ class Agent:
         self.cache_enabled = cache
         self.cache = LLMCache(ttl=cache_ttl) if cache else None
 
-        # Load MCP tools if requested
-        if load_mcp_tools and mcp_config_path:
-            self.with_mcp([mcp_config_path])
+        # Reusable aiohttp session for LLM calls
+        self._llm_session: Optional[aiohttp.ClientSession] = None
+
+        # Store MCP config for deferred async loading
+        self._pending_mcp_config = mcp_config_path if (load_mcp_tools and mcp_config_path) else None
         
     def _add_tool_internal(self, tool: Union[Tool, Callable], deferred: bool = False) -> Tool:
         """Internal method to add a single tool.
@@ -243,8 +262,8 @@ class Agent:
 
         return self
 
-    def with_mcp(self, servers: List[Union[str, Dict[str, Any]]]) -> 'Agent':
-        """Connect to MCP servers and load their tools (chainable).
+    async def with_mcp(self, servers: List[Union[str, Dict[str, Any]]]) -> 'Agent':
+        """Connect to MCP servers and load their tools (chainable, async).
 
         Args:
             servers: List of MCP server configurations. Each item can be:
@@ -256,7 +275,7 @@ class Agent:
             Self for method chaining
 
         Example:
-            >>> agent = Agent("bot").with_mcp([
+            >>> agent = await Agent("bot").with_mcp([
             ...     "http://localhost:3000",
             ...     {"url": "https://api.com/mcp", "headers": {"Auth": "Bearer xyz"}}
             ... ])
@@ -271,7 +290,7 @@ class Agent:
                     server_configs = load_mcp_servers(server)
                     for server_name, server_config in server_configs.items():
                         adapter = self.mcp_manager.add_server(server_config)
-                        tools = adapter.load_tools()
+                        tools = await adapter.load_tools()
                         for tool in tools:
                             self._add_tool_internal(tool)
                         logger.info(f"Loaded {len(tools)} tools from MCP server: {server_name}")
@@ -285,7 +304,7 @@ class Agent:
                         url=server
                     )
                     adapter = self.mcp_manager.add_server(config)
-                    tools = adapter.load_tools()
+                    tools = await adapter.load_tools()
                     for tool in tools:
                         self._add_tool_internal(tool)
                     logger.info(f"Loaded {len(tools)} tools from MCP server: {server}")
@@ -311,7 +330,7 @@ class Agent:
                         auth=auth
                     )
                     adapter = self.mcp_manager.add_server(config)
-                    tools = adapter.load_tools()
+                    tools = await adapter.load_tools()
                     for tool in tools:
                         self._add_tool_internal(tool)
                     logger.info(f"Loaded {len(tools)} tools from MCP server: {url}")
@@ -325,11 +344,18 @@ class Agent:
 
         return self
 
-    def close_mcp_connections(self):
+    async def close_mcp_connections(self):
         """Close all MCP server connections."""
-        self.mcp_manager.close_all()
+        await self.mcp_manager.close_all()
 
-    def with_skills(self, skills: List[Union[Skill, str]], skill_ttl: Optional[int] = 86400) -> 'Agent':
+    async def close(self):
+        """Close all async resources (LLM session, MCP connections)."""
+        if self._llm_session and not self._llm_session.closed:
+            await self._llm_session.close()
+            self._llm_session = None
+        await self.close_mcp_connections()
+
+    async def with_skills(self, skills: List[Union[Skill, str]], skill_ttl: Optional[int] = 86400) -> 'Agent':
         """Add agent skills with progressive loading.
         
         Skills use a 3-level loading system:
@@ -347,21 +373,21 @@ class Agent:
             
         Example:
             >>> # From GitHub URL (auto-refreshes every 24 hours)
-            >>> agent = Agent("assistant").with_skills([
+            >>> agent = await Agent("assistant").with_skills([
             ...     "https://github.com/hemanth/agentu-skills/tree/main/pdf-processor"
             ... ])
             
             >>> # Custom TTL (refresh every hour)
-            >>> agent = Agent("assistant").with_skills([...], skill_ttl=3600)
+            >>> agent = await Agent("assistant").with_skills([...], skill_ttl=3600)
             
             >>> # Cache forever (never auto-refresh)
-            >>> agent = Agent("assistant").with_skills([...], skill_ttl=None)
+            >>> agent = await Agent("assistant").with_skills([...], skill_ttl=None)
             
             >>> # Always fetch fresh
-            >>> agent = Agent("assistant").with_skills([...], skill_ttl=0)
+            >>> agent = await Agent("assistant").with_skills([...], skill_ttl=0)
             
             >>> # From local path
-            >>> agent = Agent("assistant").with_skills(["./skills/my-skill"])
+            >>> agent = await Agent("assistant").with_skills(["./skills/my-skill"])
             
             >>> # Using Skill object directly
             >>> pdf_skill = Skill(
@@ -369,10 +395,10 @@ class Agent:
             ...     description="Extract text and tables from PDF files",
             ...     instructions="skills/pdf/SKILL.md"
             ... )
-            >>> agent = Agent("assistant").with_skills([pdf_skill])
+            >>> agent = await Agent("assistant").with_skills([pdf_skill])
         """
-        # Resolve all skills (strings become Skill objects)
-        resolved_skills = [load_skill(s, ttl=skill_ttl) for s in skills]
+        # Resolve all skills concurrently (strings become Skill objects)
+        resolved_skills = await asyncio.gather(*[load_skill(s, ttl=skill_ttl) for s in skills])
         self.skills.extend(resolved_skills)
         
         # Auto-add get_skill_resource tool if not present
@@ -440,13 +466,14 @@ class Agent:
         self.memory.remember(content, memory_type, metadata, importance, store_long_term)
 
     def recall(self, query: Optional[str] = None, memory_type: Optional[str] = None,
-              limit: int = 5):
+              limit: int = 5, include_short_term: bool = True):
         """Recall memories.
 
         Args:
             query: Search query (if None, returns recent memories)
             memory_type: Filter by memory type
             limit: Maximum number of results
+            include_short_term: Whether to include short-term memories
 
         Returns:
             List of MemoryEntry objects
@@ -455,7 +482,7 @@ class Agent:
             logger.warning("Memory is not enabled for this agent")
             return []
 
-        return self.memory.recall(query, memory_type, limit)
+        return self.memory.recall(query, memory_type, limit, include_short_term)
 
     def get_memory_context(self, max_entries: int = 5) -> str:
         """Get formatted context from memories.
@@ -537,6 +564,12 @@ class Agent:
         
         return "\n".join(prompt_parts)
 
+    async def _get_llm_session(self) -> aiohttp.ClientSession:
+        """Get or create reusable aiohttp session for LLM calls."""
+        if self._llm_session is None or self._llm_session.closed:
+            self._llm_session = aiohttp.ClientSession()
+        return self._llm_session
+
     async def _call_llm(self, prompt: str) -> str:
         """Make an async API call to OpenAI-compatible endpoint."""
         # Check cache first if enabled
@@ -555,36 +588,36 @@ class Agent:
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{self.api_base}/chat/completions",
-                        json={
-                            "model": self.model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": self.temperature,
-                            "stream": False
-                        },
-                        headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as response:
-                        response.raise_for_status()
-                        response_json = await response.json()
+                session = await self._get_llm_session()
+                async with session.post(
+                    f"{self.api_base}/chat/completions",
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": self.temperature,
+                        "stream": False
+                    },
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    response.raise_for_status()
+                    response_json = await response.json()
 
-                        if "error" in response_json:
-                            logger.error(f"API error: {response_json['error']}")
-                            raise Exception(response_json['error'])
+                    if "error" in response_json:
+                        logger.error(f"API error: {response_json['error']}")
+                        raise Exception(response_json['error'])
 
-                        full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-                        if not full_response:
-                            logger.error("Empty response from API")
-                            raise Exception("Empty response from API")
+                    if not full_response:
+                        logger.error("Empty response from API")
+                        raise Exception("Empty response from API")
 
-                        # Store in cache if enabled
-                        if self.cache_enabled and self.cache:
-                            self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
+                    # Store in cache if enabled
+                    if self.cache_enabled and self.cache:
+                        self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
 
-                        return full_response
+                    return full_response
 
             except aiohttp.ClientError as e:
                 logger.error(f"Error calling LLM API: {str(e)}")
@@ -679,11 +712,22 @@ Example response for calculator:
         prompt_lower = prompt.lower()
         
         for skill in self.skills:
-            # Extract keywords from description (simple word matching)
-            desc_words = skill.description.lower().split()
+            desc_lower = skill.description.lower()
+            name_lower = skill.name.lower()
+            searchable = f"{name_lower} {desc_lower}"
+            searchable_words = searchable.split()
+            prompt_words = prompt_lower.split()
             
-            # Check if any description keywords appear in prompt
-            if any(word in prompt_lower for word in desc_words if len(word) > 3):
+            # Match via substring or shared stem (5+ char common prefix)
+            word_in_prompt = any(w in prompt_lower for w in searchable_words if len(w) > 3)
+            word_in_desc = any(w in searchable for w in prompt_words if len(w) > 3)
+            stem_match = any(
+                min(len(sw), len(pw)) >= 5 and sw[:5] == pw[:5]
+                for sw in searchable_words if len(sw) > 3
+                for pw in prompt_words if len(pw) > 3
+            )
+            
+            if word_in_prompt or word_in_desc or stem_match:
                 matched.append(skill)
                 logger.info(f"Matched skill: {skill.name} for prompt: {prompt[:50]}...")
         
@@ -706,9 +750,16 @@ Example response for calculator:
         """
         # Track inference start
         self.observer.record(EventType.INFERENCE_START, {"query": user_input})
+        
+        # Load deferred MCP tools on first inference
+        if self._pending_mcp_config:
+            await self.with_mcp([self._pending_mcp_config])
+            self._pending_mcp_config = None
+
         # Store user input in memory
         if self.memory_enabled:
-            self.memory.remember(
+            await asyncio.to_thread(
+                self.memory.remember,
                 content=f"User: {user_input}",
                 memory_type='conversation',
                 metadata={'role': 'user'},
@@ -771,7 +822,8 @@ Example response for calculator:
 
         # Store agent response in memory
         if self.memory_enabled and "tool_used" in final_response:
-            self.memory.remember(
+            await asyncio.to_thread(
+                self.memory.remember,
                 content=f"Agent: Used {final_response['tool_used']} - {final_response.get('reasoning', '')}",
                 memory_type='conversation',
                 metadata={
