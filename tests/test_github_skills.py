@@ -4,8 +4,7 @@ import pytest
 import tempfile
 import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from urllib.error import URLError
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from agentu.skill import (
     Skill,
@@ -67,7 +66,8 @@ class TestParseGitHubUrl:
 class TestLoadSkill:
     """Tests for the load_skill function."""
     
-    def test_load_skill_from_skill_object(self):
+    @pytest.mark.asyncio
+    async def test_load_skill_from_skill_object(self):
         """Passing a Skill object should return it unchanged."""
         with tempfile.TemporaryDirectory() as tmpdir:
             skill_md = Path(tmpdir) / "SKILL.md"
@@ -79,10 +79,11 @@ class TestLoadSkill:
                 instructions=str(skill_md)
             )
             
-            result = load_skill(skill)
+            result = await load_skill(skill)
             assert result is skill
     
-    def test_load_skill_from_local_path(self):
+    @pytest.mark.asyncio
+    async def test_load_skill_from_local_path(self):
         """Load skill from local directory path."""
         with tempfile.TemporaryDirectory() as tmpdir:
             skill_dir = Path(tmpdir) / "my-skill"
@@ -99,13 +100,14 @@ class TestLoadSkill:
                 "description": "A test skill"
             }))
             
-            result = load_skill(str(skill_dir))
+            result = await load_skill(str(skill_dir))
             
             assert result.name == "my-skill"
             assert result.description == "A test skill"
             assert "My Skill" in result.load_instructions()
     
-    def test_load_skill_from_local_path_without_json(self):
+    @pytest.mark.asyncio
+    async def test_load_skill_from_local_path_without_json(self):
         """Load skill from local path without skill.json uses defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
             skill_dir = Path(tmpdir) / "auto-skill"
@@ -114,90 +116,123 @@ class TestLoadSkill:
             skill_md = skill_dir / "SKILL.md"
             skill_md.write_text("# Auto Skill")
             
-            result = load_skill(str(skill_dir))
+            result = await load_skill(str(skill_dir))
             
             assert result.name == "auto-skill"
             assert "auto-skill" in result.description or "Local skill" in result.description
     
-    def test_load_skill_missing_skill_md_raises(self):
+    @pytest.mark.asyncio
+    async def test_load_skill_missing_skill_md_raises(self):
         """Error when SKILL.md is missing."""
         with tempfile.TemporaryDirectory() as tmpdir:
             skill_dir = Path(tmpdir) / "bad-skill"
             skill_dir.mkdir()
             
             with pytest.raises(FileNotFoundError, match="SKILL.md not found"):
-                load_skill(str(skill_dir))
+                await load_skill(str(skill_dir))
     
-    def test_load_skill_invalid_type_raises(self):
+    @pytest.mark.asyncio
+    async def test_load_skill_invalid_type_raises(self):
         """Error on invalid input type."""
         with pytest.raises(TypeError, match="Expected Skill or str"):
-            load_skill(123)
+            await load_skill(123)
 
 
 class TestFetchGitHubSkill:
     """Tests for GitHub skill fetching (mocked)."""
     
-    @patch('agentu.skill.urlopen')
-    def test_fetch_github_skill_success(self, mock_urlopen):
+    @pytest.mark.asyncio
+    async def test_fetch_github_skill_success(self):
         """Successfully fetch skill from GitHub."""
-        # Mock skill.json response
-        skill_json_response = MagicMock()
-        skill_json_response.read.return_value = json.dumps({
+        skill_json_data = json.dumps({
             "name": "test-skill",
             "description": "A test skill from GitHub"
-        }).encode()
-        skill_json_response.__enter__ = MagicMock(return_value=skill_json_response)
-        skill_json_response.__exit__ = MagicMock(return_value=False)
-        
-        # Mock SKILL.md response
-        skill_md_response = MagicMock()
-        skill_md_response.read.return_value = b"# Test Skill\nInstructions from GitHub."
-        skill_md_response.__enter__ = MagicMock(return_value=skill_md_response)
-        skill_md_response.__exit__ = MagicMock(return_value=False)
-        
-        mock_urlopen.side_effect = [skill_json_response, skill_md_response]
-        
-        url = "https://github.com/hemanth/skills/tree/main/test-skill"
-        skill = _fetch_github_skill(url)
+        })
+        skill_md_data = "# Test Skill\nInstructions from GitHub."
+
+        # Mock aiohttp responses
+        mock_skill_json_resp = AsyncMock()
+        mock_skill_json_resp.status = 200
+        mock_skill_json_resp.text = AsyncMock(return_value=skill_json_data)
+        mock_skill_json_resp.__aenter__ = AsyncMock(return_value=mock_skill_json_resp)
+        mock_skill_json_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_skill_md_resp = AsyncMock()
+        mock_skill_md_resp.status = 200
+        mock_skill_md_resp.text = AsyncMock(return_value=skill_md_data)
+        mock_skill_md_resp.__aenter__ = AsyncMock(return_value=mock_skill_md_resp)
+        mock_skill_md_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=[mock_skill_json_resp, mock_skill_md_resp])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            url = "https://github.com/hemanth/skills/tree/main/test-skill"
+            skill = await _fetch_github_skill(url)
         
         assert skill.name == "test-skill"
         assert skill.description == "A test skill from GitHub"
         assert "Test Skill" in skill.load_instructions()
     
-    @patch('agentu.skill.urlopen')
-    def test_fetch_github_skill_no_skill_json(self, mock_urlopen):
+    @pytest.mark.asyncio
+    async def test_fetch_github_skill_no_skill_json(self):
         """Fetch skill without skill.json uses defaults from path."""
-        # First call (skill.json) raises URLError
-        # Second call (SKILL.md) succeeds
-        skill_md_response = MagicMock()
-        skill_md_response.read.return_value = b"# Default Skill"
-        skill_md_response.__enter__ = MagicMock(return_value=skill_md_response)
-        skill_md_response.__exit__ = MagicMock(return_value=False)
-        
-        mock_urlopen.side_effect = [URLError("Not found"), skill_md_response]
-        
-        url = "https://github.com/owner/repo/tree/main/my-skill"
-        skill = _fetch_github_skill(url)
+        import aiohttp
+
+        mock_skill_json_resp = AsyncMock()
+        mock_skill_json_resp.status = 404
+        mock_skill_json_resp.__aenter__ = AsyncMock(return_value=mock_skill_json_resp)
+        mock_skill_json_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_skill_md_resp = AsyncMock()
+        mock_skill_md_resp.status = 200
+        mock_skill_md_resp.text = AsyncMock(return_value="# Default Skill")
+        mock_skill_md_resp.__aenter__ = AsyncMock(return_value=mock_skill_md_resp)
+        mock_skill_md_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=[mock_skill_json_resp, mock_skill_md_resp])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            url = "https://github.com/owner/repo/tree/main/my-skill"
+            skill = await _fetch_github_skill(url)
         
         assert skill.name == "my-skill"
         assert "owner/repo" in skill.description
     
-    @patch('agentu.skill.urlopen')
-    def test_fetch_github_skill_missing_skill_md_raises(self, mock_urlopen):
+    @pytest.mark.asyncio
+    async def test_fetch_github_skill_missing_skill_md_raises(self):
         """Error when SKILL.md cannot be fetched."""
-        # Both calls raise URLError
-        mock_urlopen.side_effect = URLError("Not found")
-        
-        url = "https://github.com/owner/repo/tree/main/bad-skill"
-        
-        with pytest.raises(FileNotFoundError, match="Could not fetch SKILL.md"):
-            _fetch_github_skill(url)
+        mock_skill_json_resp = AsyncMock()
+        mock_skill_json_resp.status = 404
+        mock_skill_json_resp.__aenter__ = AsyncMock(return_value=mock_skill_json_resp)
+        mock_skill_json_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_skill_md_resp = AsyncMock()
+        mock_skill_md_resp.status = 404
+        mock_skill_md_resp.__aenter__ = AsyncMock(return_value=mock_skill_md_resp)
+        mock_skill_md_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=[mock_skill_json_resp, mock_skill_md_resp])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch('aiohttp.ClientSession', return_value=mock_session):
+            url = "https://github.com/owner/repo/tree/main/bad-skill"
+            with pytest.raises(FileNotFoundError, match="Could not fetch SKILL.md"):
+                await _fetch_github_skill(url)
 
 
 class TestSkillWithResources:
     """Tests for skills with resources."""
     
-    def test_load_skill_with_resources(self):
+    @pytest.mark.asyncio
+    async def test_load_skill_with_resources(self):
         """Load local skill with resources defined in skill.json."""
         with tempfile.TemporaryDirectory() as tmpdir:
             skill_dir = Path(tmpdir) / "resource-skill"
@@ -221,7 +256,7 @@ class TestSkillWithResources:
                 }
             }))
             
-            result = load_skill(str(skill_dir))
+            result = await load_skill(str(skill_dir))
             
             assert result.name == "resource-skill"
             assert "templates" in result.list_resources()

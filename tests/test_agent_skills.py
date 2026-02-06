@@ -34,7 +34,8 @@ result = x + y
     shutil.rmtree(temp_dir)
 
 
-def test_agent_with_skills(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_agent_with_skills(temp_skill_dir):
     """Test adding skills to an agent."""
     skill = Skill(
         name="calculator",
@@ -42,13 +43,14 @@ def test_agent_with_skills(temp_skill_dir):
         instructions=temp_skill_dir / "SKILL.md"
     )
     
-    agent = Agent("test-agent").with_skills([skill])
+    agent = await Agent("test-agent").with_skills([skill])
     
     assert len(agent.skills) == 1
     assert agent.skills[0].name == "calculator"
 
 
-def test_agent_skill_resource_tool_added(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_agent_skill_resource_tool_added(temp_skill_dir):
     """Test that get_skill_resource tool is auto-added."""
     skill = Skill(
         name="test-skill",
@@ -56,14 +58,15 @@ def test_agent_skill_resource_tool_added(temp_skill_dir):
         instructions=temp_skill_dir / "SKILL.md"
     )
     
-    agent = Agent("test-agent").with_skills([skill])
+    agent = await Agent("test-agent").with_skills([skill])
     
     # Check that get_skill_resource tool was added
     tool_names = [t.name for t in agent.tools]
     assert "get_skill_resource" in tool_names
 
 
-def test_agent_multiple_skills(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_agent_multiple_skills(temp_skill_dir):
     """Test adding multiple skills."""
     skill1 = Skill(
         name="skill1",
@@ -80,14 +83,15 @@ def test_agent_multiple_skills(temp_skill_dir):
         instructions=skill2_md
     )
     
-    agent = Agent("test-agent").with_skills([skill1, skill2])
+    agent = await Agent("test-agent").with_skills([skill1, skill2])
     
     assert len(agent.skills) == 2
     assert agent.skills[0].name == "skill1"
     assert agent.skills[1].name == "skill2"
 
 
-def test_agent_skills_in_prompt(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_agent_skills_in_prompt(temp_skill_dir):
     """Test that skill metadata appears in formatted prompt."""
     skill = Skill(
         name="test-skill",
@@ -95,7 +99,7 @@ def test_agent_skills_in_prompt(temp_skill_dir):
         instructions=temp_skill_dir / "SKILL.md"
     )
     
-    agent = Agent("test-agent").with_skills([skill])
+    agent = await Agent("test-agent").with_skills([skill])
     prompt = agent._format_tools_for_prompt()
     
     # Check that skill metadata is in the prompt
@@ -104,7 +108,8 @@ def test_agent_skills_in_prompt(temp_skill_dir):
     assert "A test skill for demonstrations" in prompt
 
 
-def test_agent_with_tools_and_skills(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_agent_with_tools_and_skills(temp_skill_dir):
     """Test agent with both tools and skills."""
     def my_tool(x: int) -> int:
         """A simple tool."""
@@ -116,7 +121,7 @@ def test_agent_with_tools_and_skills(temp_skill_dir):
         instructions=temp_skill_dir / "SKILL.md"
     )
     
-    agent = (Agent("test-agent")
+    agent = await (Agent("test-agent")
              .with_tools([my_tool])
              .with_skills([skill]))
     
@@ -129,7 +134,8 @@ def test_agent_with_tools_and_skills(temp_skill_dir):
     assert "Available tools" in prompt
 
 
-def test_skill_chainability(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_skill_chainability(temp_skill_dir):
     """Test that with_skills returns self for chaining."""
     skill = Skill(
         name="test-skill",
@@ -138,6 +144,6 @@ def test_skill_chainability(temp_skill_dir):
     )
     
     agent = Agent("test-agent")
-    result = agent.with_skills([skill])
+    result = await agent.with_skills([skill])
     
     assert result is agent  # Should return self for chaining

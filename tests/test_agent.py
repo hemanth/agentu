@@ -1,50 +1,64 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from agentu import Agent, Tool
-from agentu.agent import get_ollama_models, get_default_model
+from agentu.agent import get_ollama_models, get_default_model, _get_ollama_models_sync
 
-def test_get_ollama_models_success():
-    """Test successful retrieval of Ollama models."""
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
+@pytest.mark.asyncio
+async def test_get_ollama_models_success():
+    """Test successful retrieval of Ollama models (async)."""
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(return_value={
         "models": [
             {"name": "qwen3:latest"},
             {"name": "llama2:latest"},
             {"name": "mistral:latest"}
         ]
-    }
-    mock_response.raise_for_status = MagicMock()
+    })
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
 
-    with patch('requests.get', return_value=mock_response) as mock_get:
-        models = get_ollama_models("http://localhost:11434")
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch('aiohttp.ClientSession', return_value=mock_session):
+        models = await get_ollama_models("http://localhost:11434")
         assert models == ["qwen3:latest", "llama2:latest", "mistral:latest"]
-        mock_get.assert_called_once_with("http://localhost:11434/api/tags", timeout=2)
 
 
-def test_get_ollama_models_failure():
-    """Test handling of Ollama API failure."""
-    with patch('requests.get', side_effect=Exception("Connection error")):
-        models = get_ollama_models("http://localhost:11434")
+@pytest.mark.asyncio
+async def test_get_ollama_models_failure():
+    """Test handling of Ollama API failure (async)."""
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=Exception("Connection error"))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch('aiohttp.ClientSession', return_value=mock_session):
+        models = await get_ollama_models("http://localhost:11434")
         assert models == []
 
 
 def test_get_default_model_with_available_models():
     """Test get_default_model returns first available model."""
-    with patch('agentu.agent.get_ollama_models', return_value=["qwen3:latest", "llama2:latest"]):
+    with patch('agentu.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
         model = get_default_model("http://localhost:11434")
         assert model == "qwen3:latest"
 
 
 def test_get_default_model_no_models():
     """Test get_default_model returns qwen3:latest fallback when no models available."""
-    with patch('agentu.agent.get_ollama_models', return_value=[]):
+    with patch('agentu.agent._get_ollama_models_sync', return_value=[]):
         model = get_default_model("http://localhost:11434")
         assert model == "qwen3:latest"
 
 
 def test_agent_creation_auto_detect_model():
     """Test agent auto-detects model from Ollama."""
-    with patch('agentu.agent.get_ollama_models', return_value=["qwen3:latest", "llama2:latest"]):
+    with patch('agentu.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
         agent = Agent("test_agent")
         assert agent.name == "test_agent"
         assert agent.model == "qwen3:latest"  # Should use first available model
@@ -53,7 +67,7 @@ def test_agent_creation_auto_detect_model():
 
 def test_agent_creation_explicit_model():
     """Test agent uses explicit model when provided."""
-    with patch('agentu.agent.get_ollama_models', return_value=["qwen3:latest", "llama2:latest"]):
+    with patch('agentu.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
         agent = Agent("test_agent", model="mistral:latest")
         assert agent.name == "test_agent"
         assert agent.model == "mistral:latest"  # Should use explicit model, not auto-detected
@@ -62,7 +76,7 @@ def test_agent_creation_explicit_model():
 
 def test_agent_creation_fallback_model():
     """Test agent falls back to qwen3:latest when no Ollama models available."""
-    with patch('agentu.agent.get_ollama_models', return_value=[]):
+    with patch('agentu.agent._get_ollama_models_sync', return_value=[]):
         agent = Agent("test_agent")
         assert agent.name == "test_agent"
         assert agent.model == "qwen3:latest"  # Should fall back to qwen3:latest

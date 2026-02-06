@@ -40,7 +40,8 @@ Use Python for math.
     shutil.rmtree(temp_dir)
 
 
-def test_match_skills_pdf_query(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_match_skills_pdf_query(temp_skill_dir):
     """Test that PDF-related queries match PDF skill."""
     pdf_skill = Skill(
         name="pdf",
@@ -48,7 +49,7 @@ def test_match_skills_pdf_query(temp_skill_dir):
         instructions=temp_skill_dir / "pdf.md"
     )
     
-    agent = Agent("test").with_skills([pdf_skill])
+    agent = await Agent("test").with_skills([pdf_skill])
     
     # Should match on "PDF" keyword
     matched = agent._match_skills("How do I extract text from a PDF?")
@@ -56,7 +57,8 @@ def test_match_skills_pdf_query(temp_skill_dir):
     assert matched[0].name == "pdf"
 
 
-def test_match_skills_no_match(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_match_skills_no_match(temp_skill_dir):
     """Test that unrelated queries don't match skills."""
     pdf_skill = Skill(
         name="pdf",
@@ -64,14 +66,15 @@ def test_match_skills_no_match(temp_skill_dir):
         instructions=temp_skill_dir / "pdf.md"
     )
     
-    agent = Agent("test").with_skills([pdf_skill])
+    agent = await Agent("test").with_skills([pdf_skill])
     
     # Should NOT match weather query
     matched = agent._match_skills("What is the weather today?")
     assert len(matched) == 0
 
 
-def test_match_skills_multiple(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_match_skills_multiple(temp_skill_dir):
     """Test matching multiple skills."""
     pdf_skill = Skill(
         name="pdf",
@@ -85,7 +88,7 @@ def test_match_skills_multiple(temp_skill_dir):
         instructions=temp_skill_dir / "calc.md"
     )
     
-    agent = Agent("test").with_skills([pdf_skill, calc_skill])
+    agent = await Agent("test").with_skills([pdf_skill, calc_skill])
     
     # Should only match calculator
     matched = agent._match_skills("Calculate 5 + 3")
@@ -103,7 +106,8 @@ def test_build_context_without_skills(temp_skill_dir):
     assert "Active Skills" not in context
 
 
-def test_build_context_with_skills(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_build_context_with_skills(temp_skill_dir):
     """Test context building with active skills."""
     pdf_skill = Skill(
         name="pdf",
@@ -111,7 +115,7 @@ def test_build_context_with_skills(temp_skill_dir):
         instructions=temp_skill_dir / "pdf.md"
     )
     
-    agent = Agent("test").with_skills([pdf_skill])
+    agent = await Agent("test").with_skills([pdf_skill])
     
     context = agent._build_turn_context("Extract PDF", [], [pdf_skill])
     
@@ -121,7 +125,8 @@ def test_build_context_with_skills(temp_skill_dir):
     assert len(context) > 100  # Should include full instructions
 
 
-def test_context_size_difference(temp_skill_dir):
+@pytest.mark.asyncio
+async def test_context_size_difference(temp_skill_dir):
     """Test that skills significantly increase context when active."""
     pdf_skill = Skill(
         name="pdf",  
@@ -129,7 +134,7 @@ def test_context_size_difference(temp_skill_dir):
         instructions=temp_skill_dir / "pdf.md"
     )
     
-    agent = Agent("test").with_skills([pdf_skill])
+    agent = await Agent("test").with_skills([pdf_skill])
     
     without_skill = agent._build_turn_context("Query", [])
     with_skill = agent._build_turn_context("Query", [], [pdf_skill])

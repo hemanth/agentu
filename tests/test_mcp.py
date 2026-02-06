@@ -1,7 +1,8 @@
 """Tests for MCP functionality."""
 import json
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+import asyncio
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from agentu import (
     MCPServerConfig,
     AuthConfig,
@@ -106,16 +107,36 @@ class TestMCPHTTPTransport:
         assert headers["Content-Type"] == "application/json"
         assert "Authorization" not in headers
 
-    @patch('agentu.mcp_transport.requests.post')
-    def test_send_request_success(self, mock_post):
-        mock_response = Mock()
-        mock_response.json.return_value = {
+    @pytest.mark.asyncio
+    async def test_send_request_success(self):
+        config = MCPServerConfig(
+            name="test",
+            transport_type=TransportType.HTTP,
+            url="https://example.com/mcp"
+        )
+        transport = MCPHTTPTransport(config)
+
+        mock_response = AsyncMock()
+        mock_response.headers = {}
+        mock_response.raise_for_status = Mock()
+        mock_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "result": {"success": True},
             "id": 1
-        }
-        mock_post.return_value = mock_response
+        })
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
 
+        mock_session = AsyncMock()
+        mock_session.post = Mock(return_value=mock_response)
+        mock_session.closed = False
+        transport._http_session = mock_session
+
+        result = await transport.send_request("test_method", {"param": "value"})
+        assert result == {"success": True}
+
+    @pytest.mark.asyncio
+    async def test_send_request_error(self):
         config = MCPServerConfig(
             name="test",
             transport_type=TransportType.HTTP,
@@ -123,28 +144,24 @@ class TestMCPHTTPTransport:
         )
         transport = MCPHTTPTransport(config)
 
-        result = transport.send_request("test_method", {"param": "value"})
-        assert result == {"success": True}
-
-    @patch('agentu.mcp_transport.requests.post')
-    def test_send_request_error(self, mock_post):
-        mock_response = Mock()
-        mock_response.json.return_value = {
+        mock_response = AsyncMock()
+        mock_response.headers = {}
+        mock_response.raise_for_status = Mock()
+        mock_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "error": {"code": -1, "message": "Test error"},
             "id": 1
-        }
-        mock_post.return_value = mock_response
+        })
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
 
-        config = MCPServerConfig(
-            name="test",
-            transport_type=TransportType.HTTP,
-            url="https://example.com/mcp"
-        )
-        transport = MCPHTTPTransport(config)
+        mock_session = AsyncMock()
+        mock_session.post = Mock(return_value=mock_response)
+        mock_session.closed = False
+        transport._http_session = mock_session
 
         with pytest.raises(Exception, match="MCP server error"):
-            transport.send_request("test_method")
+            await transport.send_request("test_method")
 
 
 class TestMCPConfigLoader:
@@ -191,25 +208,27 @@ class TestMCPConfigLoader:
 class TestAgentMCPIntegration:
     """Test Agent integration with MCP."""
 
-    @patch.object(MCPToolAdapter, 'load_tools')
-    def test_with_mcp_url(self, mock_load_tools):
+    @patch.object(MCPToolAdapter, 'load_tools', new_callable=AsyncMock)
+    @pytest.mark.asyncio
+    async def test_with_mcp_url(self, mock_load_tools):
         """Test with_mcp with simple URL."""
         mock_load_tools.return_value = []
 
         agent = Agent(name="test_agent")
-        result = agent.with_mcp(["https://example.com/mcp"])
+        result = await agent.with_mcp(["https://example.com/mcp"])
 
         assert result is agent  # Check chainable
         assert len(agent.tools) == 0  # Mock returns empty
         mock_load_tools.assert_called_once()
 
-    @patch.object(MCPToolAdapter, 'load_tools')
-    def test_with_mcp_dict(self, mock_load_tools):
+    @patch.object(MCPToolAdapter, 'load_tools', new_callable=AsyncMock)
+    @pytest.mark.asyncio
+    async def test_with_mcp_dict(self, mock_load_tools):
         """Test with_mcp with dict containing auth."""
         mock_load_tools.return_value = []
 
         agent = Agent(name="test_agent")
-        result = agent.with_mcp([{
+        result = await agent.with_mcp([{
             "url": "https://example.com/mcp",
             "headers": {"Authorization": "Bearer token123"}
         }])
@@ -221,8 +240,9 @@ class TestAgentMCPIntegration:
 class TestMCPToolAdapter:
     """Test MCPToolAdapter class."""
 
-    @patch.object(MCPHTTPTransport, 'list_tools')
-    def test_load_tools(self, mock_list_tools):
+    @patch.object(MCPHTTPTransport, 'list_tools', new_callable=AsyncMock)
+    @pytest.mark.asyncio
+    async def test_load_tools(self, mock_list_tools):
         """Test loading tools from MCP server."""
         mock_list_tools.return_value = [
             {
@@ -251,7 +271,7 @@ class TestMCPToolAdapter:
             url="https://example.com/mcp"
         )
         adapter = MCPToolAdapter(config)
-        tools = adapter.load_tools()
+        tools = await adapter.load_tools()
 
         assert len(tools) == 1
         assert tools[0].name == "test_server_test_tool"
@@ -259,8 +279,9 @@ class TestMCPToolAdapter:
         assert "query" in tools[0].parameters
         assert "limit" in tools[0].parameters
 
-    @patch.object(MCPHTTPTransport, 'list_tools')
-    def test_convert_schema_to_parameters(self, mock_list_tools):
+    @patch.object(MCPHTTPTransport, 'list_tools', new_callable=AsyncMock)
+    @pytest.mark.asyncio
+    async def test_convert_schema_to_parameters(self, mock_list_tools):
         """Test JSON schema conversion to parameters."""
         mock_list_tools.return_value = [
             {
@@ -288,7 +309,7 @@ class TestMCPToolAdapter:
             url="https://example.com/mcp"
         )
         adapter = MCPToolAdapter(config)
-        tools = adapter.load_tools()
+        tools = await adapter.load_tools()
 
         params = tools[0].parameters
         assert "required_param" in params
@@ -300,23 +321,36 @@ class TestMCPToolAdapter:
 class TestMCPHTTPTransportIntegration:
     """Integration tests for MCPHTTPTransport."""
 
-    @patch('agentu.mcp_transport.requests.post')
-    def test_list_tools_flow(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_list_tools_flow(self):
         """Test complete list_tools flow."""
+        config = MCPServerConfig(
+            name="test",
+            transport_type=TransportType.HTTP,
+            url="https://example.com/mcp"
+        )
+        transport = MCPHTTPTransport(config)
+
         # Mock initialize response
-        init_response = Mock()
-        init_response.json.return_value = {
+        init_response = AsyncMock()
+        init_response.headers = {"mcp-session-id": "test-session"}
+        init_response.raise_for_status = Mock()
+        init_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {}
             },
             "id": 1
-        }
+        })
+        init_response.__aenter__ = AsyncMock(return_value=init_response)
+        init_response.__aexit__ = AsyncMock(return_value=False)
 
         # Mock list_tools response
-        tools_response = Mock()
-        tools_response.json.return_value = {
+        tools_response = AsyncMock()
+        tools_response.headers = {}
+        tools_response.raise_for_status = Mock()
+        tools_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "result": {
                 "tools": [
@@ -328,27 +362,36 @@ class TestMCPHTTPTransportIntegration:
                 ]
             },
             "id": 2
-        }
+        })
+        tools_response.__aenter__ = AsyncMock(return_value=tools_response)
+        tools_response.__aexit__ = AsyncMock(return_value=False)
 
-        mock_post.side_effect = [init_response, tools_response]
+        mock_session = AsyncMock()
+        mock_session.post = Mock(side_effect=[init_response, tools_response])
+        mock_session.closed = False
+        transport._http_session = mock_session
 
+        tools = await transport.list_tools()
+
+        assert len(tools) == 1
+        assert tools[0]["name"] == "search"
+        assert mock_session.post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_call_tool_flow(self):
+        """Test complete call_tool flow."""
         config = MCPServerConfig(
             name="test",
             transport_type=TransportType.HTTP,
             url="https://example.com/mcp"
         )
         transport = MCPHTTPTransport(config)
-        tools = transport.list_tools()
+        transport.session_id = "existing-session"
 
-        assert len(tools) == 1
-        assert tools[0]["name"] == "search"
-        assert mock_post.call_count == 2
-
-    @patch('agentu.mcp_transport.requests.post')
-    def test_call_tool_flow(self, mock_post):
-        """Test complete call_tool flow."""
-        mock_response = Mock()
-        mock_response.json.return_value = {
+        mock_response = AsyncMock()
+        mock_response.headers = {}
+        mock_response.raise_for_status = Mock()
+        mock_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "result": {
                 "content": [
@@ -356,30 +399,22 @@ class TestMCPHTTPTransportIntegration:
                 ]
             },
             "id": 1
-        }
-        mock_post.return_value = mock_response
+        })
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
 
-        config = MCPServerConfig(
-            name="test",
-            transport_type=TransportType.HTTP,
-            url="https://example.com/mcp"
-        )
-        transport = MCPHTTPTransport(config)
-        result = transport.call_tool("test_tool", {"param": "value"})
+        mock_session = AsyncMock()
+        mock_session.post = Mock(return_value=mock_response)
+        mock_session.closed = False
+        transport._http_session = mock_session
+
+        result = await transport.call_tool("test_tool", {"param": "value"})
 
         assert result == "Tool result"
 
-    @patch('agentu.mcp_transport.requests.post')
-    def test_call_tool_with_auth(self, mock_post):
+    @pytest.mark.asyncio
+    async def test_call_tool_with_auth(self):
         """Test tool call with authentication headers."""
-        mock_response = Mock()
-        mock_response.json.return_value = {
-            "jsonrpc": "2.0",
-            "result": {"content": [{"text": "Result"}]},
-            "id": 1
-        }
-        mock_post.return_value = mock_response
-
         auth = AuthConfig.bearer_token("secret_token")
         config = MCPServerConfig(
             name="test",
@@ -388,10 +423,28 @@ class TestMCPHTTPTransportIntegration:
             auth=auth
         )
         transport = MCPHTTPTransport(config)
-        transport.call_tool("tool", {})
+        transport.session_id = "existing-session"
+
+        mock_response = AsyncMock()
+        mock_response.headers = {}
+        mock_response.raise_for_status = Mock()
+        mock_response.json = AsyncMock(return_value={
+            "jsonrpc": "2.0",
+            "result": {"content": [{"text": "Result"}]},
+            "id": 1
+        })
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.post = Mock(return_value=mock_response)
+        mock_session.closed = False
+        transport._http_session = mock_session
+
+        await transport.call_tool("tool", {})
 
         # Verify auth header was included
-        call_args = mock_post.call_args
+        call_args = mock_session.post.call_args
         headers = call_args[1]["headers"]
         assert headers["Authorization"] == "Bearer secret_token"
 
@@ -476,21 +529,33 @@ class TestMCPConfigLoaderAdvanced:
 class TestEndToEndIntegration:
     """End-to-end integration tests."""
 
-    @patch('agentu.mcp_transport.requests.post')
     @pytest.mark.asyncio
-    async def test_complete_workflow(self, mock_post):
+    async def test_complete_workflow(self):
         """Test complete workflow from config to tool execution."""
-        # Mock initialize
-        init_response = Mock()
-        init_response.json.return_value = {
+        config = MCPServerConfig(
+            name="math_server",
+            transport_type=TransportType.HTTP,
+            url="https://math.example.com/mcp",
+            auth=AuthConfig(type="custom", headers={"Authorization": "Bearer test_token"})
+        )
+
+        # Mock initialize response
+        init_response = AsyncMock()
+        init_response.headers = {"mcp-session-id": "test-session"}
+        init_response.raise_for_status = Mock()
+        init_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "result": {"protocolVersion": "2024-11-05"},
             "id": 1
-        }
+        })
+        init_response.__aenter__ = AsyncMock(return_value=init_response)
+        init_response.__aexit__ = AsyncMock(return_value=False)
 
-        # Mock list_tools
-        tools_response = Mock()
-        tools_response.json.return_value = {
+        # Mock list_tools response
+        tools_response = AsyncMock()
+        tools_response.headers = {}
+        tools_response.raise_for_status = Mock()
+        tools_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "result": {
                 "tools": [
@@ -509,45 +574,56 @@ class TestEndToEndIntegration:
                 ]
             },
             "id": 2
-        }
+        })
+        tools_response.__aenter__ = AsyncMock(return_value=tools_response)
+        tools_response.__aexit__ = AsyncMock(return_value=False)
 
-        # Mock call_tool
-        call_response = Mock()
-        call_response.json.return_value = {
+        # Mock call_tool response
+        call_response = AsyncMock()
+        call_response.headers = {}
+        call_response.raise_for_status = Mock()
+        call_response.json = AsyncMock(return_value={
             "jsonrpc": "2.0",
             "result": {"content": [{"text": "42"}]},
             "id": 3
-        }
-
-        mock_post.side_effect = [init_response, tools_response, call_response]
+        })
+        call_response.__aenter__ = AsyncMock(return_value=call_response)
+        call_response.__aexit__ = AsyncMock(return_value=False)
 
         # Create agent and add MCP server
         agent = Agent(name="test_agent")
-        agent.with_mcp([{
-            "url": "https://math.example.com/mcp",
-            "headers": {"Authorization": "Bearer test_token"},
-            "name": "math_server"
-        }])
 
-        # Verify tools loaded
-        assert len(agent.tools) == 1
-        assert agent.tools[0].name == "math_server_calculator"
+        # Inject mock session into the adapter after with_mcp creates it
+        with patch('aiohttp.ClientSession') as mock_session_cls:
+            mock_session = AsyncMock()
+            mock_session.post = Mock(side_effect=[init_response, tools_response, call_response])
+            mock_session.closed = False
+            mock_session.close = AsyncMock()
+            mock_session_cls.return_value = mock_session
 
-        # Execute tool
-        result = await agent.call("math_server_calculator", {
-            "operation": "add",
-            "x": 40,
-            "y": 2
-        })
+            await agent.with_mcp([{
+                "url": "https://math.example.com/mcp",
+                "headers": {"Authorization": "Bearer test_token"},
+                "name": "math_server"
+            }])
 
-        assert result == "42"
-        agent.close_mcp_connections()
+            # Verify tools loaded
+            assert len(agent.tools) == 1
+            assert agent.tools[0].name == "math_server_calculator"
+
+            # Execute tool
+            result = await agent.call("math_server_calculator", {
+                "operation": "add",
+                "x": 40,
+                "y": 2
+            })
+
+            assert result == "42"
+            await agent.close_mcp_connections()
 
     @patch('agentu.mcp_config.load_mcp_servers')
-    @patch('agentu.mcp_transport.requests.post')
-    def test_auto_load_from_config(self, mock_post, mock_load_servers):
-        """Test auto-loading tools from config file."""
-        # Mock config loader
+    def test_auto_load_from_config(self, mock_load_servers):
+        """Test auto-loading tools from config file stores config for deferred loading."""
         mock_load_servers.return_value = {
             "server1": MCPServerConfig(
                 name="server1",
@@ -556,26 +632,8 @@ class TestEndToEndIntegration:
             )
         }
 
-        # Mock MCP responses
-        init_response = Mock()
-        init_response.json.return_value = {
-            "jsonrpc": "2.0",
-            "result": {"protocolVersion": "2024-11-05"},
-            "id": 1
-        }
-
-        tools_response = Mock()
-        tools_response.json.return_value = {
-            "jsonrpc": "2.0",
-            "result": {"tools": []},
-            "id": 2
-        }
-
-        mock_post.side_effect = [init_response, tools_response]
-
-        # Create agent with auto-load
+        # Create agent with auto-load — now deferred
         agent = Agent(name="auto_agent", load_mcp_tools=True, mcp_config_path="config.json")
 
-        # Verify load was called
-        mock_load_servers.assert_called_once()
-        agent.close_mcp_connections()
+        # Verify config is stored for deferred loading
+        assert agent._pending_mcp_config == "config.json"
