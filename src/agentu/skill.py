@@ -7,6 +7,8 @@ Skills provide domain-specific expertise through a 3-level loading system:
 - Level 3: Resources (loaded on-demand)
 """
 
+import asyncio
+import aiohttp
 import json
 import logging
 import re
@@ -66,7 +68,7 @@ def _parse_github_url(url: str) -> tuple:
     raise ValueError(f"Could not parse GitHub URL or shorthand: {url}")
 
 
-def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
+async def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
     """Fetch a skill from GitHub and cache it locally.
     
     Args:
@@ -92,7 +94,7 @@ def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
     should_fetch = True
     if ttl is not None and ttl > 0 and instructions_file.exists() and cache_meta_file.exists():
         try:
-            cache_time = float(cache_meta_file.read_text().strip())
+            cache_time = float(await asyncio.to_thread(cache_meta_file.read_text))
             age = time.time() - cache_time
             if age < ttl:
                 should_fetch = False
@@ -109,7 +111,8 @@ def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
         try:
             skill_json_path = cache_path / "skill.json"
             if skill_json_path.exists():
-                metadata = json.loads(skill_json_path.read_text())
+                content = await asyncio.to_thread(skill_json_path.read_text)
+                metadata = json.loads(content)
             else:
                 metadata = {
                     "name": path.split("/")[-1],
@@ -135,52 +138,66 @@ def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
             logger.warning(f"Failed to load cached skill, refetching: {e}")
             should_fetch = True
     
-    # Fetch from GitHub
+    # Fetch from GitHub using aiohttp
     raw_base = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
     
-    # Fetch skill.json for metadata
     skill_json_url = f"{raw_base}/skill.json"
     skill_md_url = f"{raw_base}/SKILL.md"
     
-    try:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
         # Try to fetch skill.json first
-        with urlopen(skill_json_url, timeout=10) as response:
-            metadata = json.loads(response.read().decode())
-            # Cache skill.json
-            (cache_path / "skill.json").write_text(json.dumps(metadata, indent=2))
-    except URLError:
-        # No skill.json, use defaults from path
-        metadata = {
-            "name": path.split("/")[-1],
-            "description": f"Skill from {owner}/{repo}"
-        }
-    
-    # Fetch SKILL.md instructions
-    try:
-        with urlopen(skill_md_url, timeout=10) as response:
-            instructions_content = response.read().decode()
-            instructions_file.write_text(instructions_content)
-            logger.info(f"Cached skill instructions: {instructions_file}")
-    except URLError as e:
-        raise FileNotFoundError(f"Could not fetch SKILL.md from {skill_md_url}: {e}")
-    
-    # Update cache metadata with current time
-    cache_meta_file.write_text(str(time.time()))
-    
-    # Fetch resources if specified in metadata
-    resources = {}
-    if "resources" in metadata:
-        for key, resource_path in metadata["resources"].items():
-            resource_url = f"{raw_base}/{resource_path}"
-            resource_file = cache_path / resource_path
-            resource_file.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                with urlopen(resource_url, timeout=10) as response:
-                    resource_file.write_text(response.read().decode())
-                resources[key] = str(resource_file)
-                logger.info(f"Cached skill resource '{key}': {resource_file}")
-            except URLError:
-                logger.warning(f"Could not fetch resource '{key}' from {resource_url}")
+        try:
+            async with session.get(skill_json_url) as response:
+                if response.status == 200:
+                    metadata = json.loads(await response.text())
+                    await asyncio.to_thread(
+                        (cache_path / "skill.json").write_text,
+                        json.dumps(metadata, indent=2)
+                    )
+                else:
+                    metadata = {
+                        "name": path.split("/")[-1],
+                        "description": f"Skill from {owner}/{repo}"
+                    }
+        except aiohttp.ClientError:
+            metadata = {
+                "name": path.split("/")[-1],
+                "description": f"Skill from {owner}/{repo}"
+            }
+        
+        # Fetch SKILL.md instructions
+        try:
+            async with session.get(skill_md_url) as response:
+                if response.status == 200:
+                    instructions_content = await response.text()
+                    await asyncio.to_thread(instructions_file.write_text, instructions_content)
+                    logger.info(f"Cached skill instructions: {instructions_file}")
+                else:
+                    raise FileNotFoundError(f"Could not fetch SKILL.md from {skill_md_url}: HTTP {response.status}")
+        except aiohttp.ClientError as e:
+            raise FileNotFoundError(f"Could not fetch SKILL.md from {skill_md_url}: {e}")
+        
+        # Update cache metadata with current time
+        await asyncio.to_thread(cache_meta_file.write_text, str(time.time()))
+        
+        # Fetch resources if specified in metadata
+        resources = {}
+        if "resources" in metadata:
+            for key, resource_path in metadata["resources"].items():
+                resource_url = f"{raw_base}/{resource_path}"
+                resource_file = cache_path / resource_path
+                resource_file.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    async with session.get(resource_url) as response:
+                        if response.status == 200:
+                            content = await response.text()
+                            await asyncio.to_thread(resource_file.write_text, content)
+                            resources[key] = str(resource_file)
+                            logger.info(f"Cached skill resource '{key}': {resource_file}")
+                        else:
+                            logger.warning(f"Could not fetch resource '{key}' from {resource_url}")
+                except aiohttp.ClientError:
+                    logger.warning(f"Could not fetch resource '{key}' from {resource_url}")
     
     return Skill(
         name=metadata.get("name", path.split("/")[-1]),
@@ -191,7 +208,7 @@ def _fetch_github_skill(url: str, ttl: Optional[int] = 86400) -> 'Skill':
     )
 
 
-def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skill':
+async def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skill':
     """Load a skill from various sources.
     
     Args:
@@ -203,11 +220,11 @@ def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skil
         Skill object
         
     Examples:
-        >>> skill = load_skill("hemanth/agentu-skills/pdf-processor")  # shorthand
-        >>> skill = load_skill("owner/repo/skill@v1.0")  # with branch
-        >>> skill = load_skill("https://github.com/hemanth/agentu-skills/tree/main/pdf")
-        >>> skill = load_skill("./skills/my-skill")
-        >>> skill = load_skill(existing_skill_object)
+        >>> skill = await load_skill("hemanth/agentu-skills/pdf-processor")  # shorthand
+        >>> skill = await load_skill("owner/repo/skill@v1.0")  # with branch
+        >>> skill = await load_skill("https://github.com/hemanth/agentu-skills/tree/main/pdf")
+        >>> skill = await load_skill("./skills/my-skill")
+        >>> skill = await load_skill(existing_skill_object)
     """
     if isinstance(source, Skill):
         return source
@@ -217,7 +234,7 @@ def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skil
     
     # GitHub URL (full URL format)
     if source.startswith("https://github.com/") or source.startswith("git@github.com:"):
-        return _fetch_github_skill(source, ttl=ttl)
+        return await _fetch_github_skill(source, ttl=ttl)
     
     # Check if it's a shorthand GitHub format (owner/repo/path) 
     # Must have at least 2 slashes and not start with ./ or /
@@ -225,9 +242,9 @@ def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skil
         parts = source.split('/')
         if len(parts) >= 3:
             # Looks like shorthand: owner/repo/path or owner/repo/path@branch
-            return _fetch_github_skill(source, ttl=ttl)
+            return await _fetch_github_skill(source, ttl=ttl)
     
-    # Local path - look for SKILL.md or skill.json
+    # Local path - look for SKILL.md or skill.json (sync, fast)
     path = Path(source)
     if not path.exists():
         raise FileNotFoundError(f"Skill path not found: {path}")
@@ -236,7 +253,8 @@ def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) -> 'Skil
     skill_json = path / "skill.json"
     
     if skill_json.exists():
-        metadata = json.loads(skill_json.read_text())
+        content = await asyncio.to_thread(skill_json.read_text)
+        metadata = json.loads(content)
     else:
         metadata = {
             "name": path.name,
