@@ -24,19 +24,19 @@ class MCPToolAdapter:
         self.tools_cache: List[Dict[str, Any]] = []
 
     def _create_tool_function(self, tool_name: str) -> Callable:
-        """Create a callable function that invokes the remote MCP tool.
+        """Create an async callable function that invokes the remote MCP tool.
 
         Args:
             tool_name: Name of the MCP tool
 
         Returns:
-            Callable function that accepts kwargs and calls the remote tool
+            Async callable function that accepts kwargs and calls the remote tool
         """
-        def tool_function(**kwargs) -> Any:
-            """Wrapper function that calls the remote MCP tool."""
+        async def tool_function(**kwargs) -> Any:
+            """Async wrapper function that calls the remote MCP tool."""
             try:
                 logger.info(f"Calling remote MCP tool: {tool_name} with args: {kwargs}")
-                result = self.transport.call_tool(tool_name, kwargs)
+                result = await self.transport.call_tool(tool_name, kwargs)
                 return result
             except Exception as e:
                 logger.error(f"Error calling remote tool {tool_name}: {str(e)}")
@@ -80,7 +80,7 @@ class MCPToolAdapter:
 
         return parameters
 
-    def load_tools(self) -> List[Tool]:
+    async def load_tools(self) -> List[Tool]:
         """Load all tools from the MCP server and convert them to Tool objects.
 
         Returns:
@@ -88,7 +88,7 @@ class MCPToolAdapter:
         """
         try:
             # Fetch tools from remote server
-            self.tools_cache = self.transport.list_tools()
+            self.tools_cache = await self.transport.list_tools()
             logger.info(f"Loaded {len(self.tools_cache)} tools from MCP server: {self.server_config.name}")
 
             # Convert to Tool objects
@@ -124,10 +124,10 @@ class MCPToolAdapter:
             logger.error(f"Error loading tools from MCP server {self.server_config.name}: {str(e)}")
             raise
 
-    def close(self):
+    async def close(self):
         """Close the transport connection."""
         if self.transport:
-            self.transport.close()
+            await self.transport.close()
 
 
 class MCPToolManager:
@@ -155,7 +155,7 @@ class MCPToolManager:
 
         return adapter
 
-    def load_all_tools(self) -> List[Tool]:
+    async def load_all_tools(self) -> List[Tool]:
         """Load tools from all registered MCP servers.
 
         Returns:
@@ -165,7 +165,7 @@ class MCPToolManager:
 
         for server_name, adapter in self.adapters.items():
             try:
-                tools = adapter.load_tools()
+                tools = await adapter.load_tools()
                 all_tools.extend(tools)
                 logger.info(f"Loaded {len(tools)} tools from {server_name}")
             except Exception as e:
@@ -190,9 +190,9 @@ class MCPToolManager:
 
         return self.adapters[server_name]
 
-    def close_all(self):
+    async def close_all(self):
         """Close all transport connections."""
         for adapter in self.adapters.values():
-            adapter.close()
+            await adapter.close()
 
         logger.info("Closed all MCP connections")

@@ -1,13 +1,12 @@
 """MCP transport module for connecting to remote MCP servers with auth support."""
-import requests
+import aiohttp
+import asyncio
 import json
 import logging
-import threading
 import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
-from queue import Queue, Empty
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -100,19 +99,19 @@ class MCPTransport:
 
         return headers
 
-    def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send MCP JSON-RPC request. To be implemented by subclasses."""
         raise NotImplementedError
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> List[Dict[str, Any]]:
         """List available tools from the MCP server."""
         raise NotImplementedError
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool on the MCP server."""
         raise NotImplementedError
 
-    def close(self):
+    async def close(self):
         """Close the transport connection."""
         pass
 
@@ -123,13 +122,20 @@ class MCPHTTPTransport(MCPTransport):
     def __init__(self, config: MCPServerConfig):
         super().__init__(config)
         self.request_id = 0
+        self._http_session: Optional[aiohttp.ClientSession] = None
 
     def _next_request_id(self) -> int:
         """Get next request ID for JSON-RPC."""
         self.request_id += 1
         return self.request_id
 
-    def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create a reusable aiohttp session."""
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
+
+    async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send MCP JSON-RPC request over HTTP.
 
         Handles mcp-session-id header as per MCP Streamable HTTP transport spec.
@@ -155,35 +161,35 @@ class MCPHTTPTransport(MCPTransport):
                 headers["mcp-session-id"] = self.session_id
 
             logger.info(f"Sending MCP request to {self.config.url}: {method}")
-            response = requests.post(
+            session = await self._get_session()
+            async with session.post(
                 self.config.url,
                 json=request_payload,
                 headers=headers,
-                timeout=self.config.timeout
-            )
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+            ) as response:
+                # Capture session ID from response headers (per MCP Streamable HTTP spec)
+                if "mcp-session-id" in response.headers:
+                    self.session_id = response.headers["mcp-session-id"]
+                    logger.debug(f"Captured MCP session ID: {self.session_id}")
 
-            # Capture session ID from response headers (per MCP Streamable HTTP spec)
-            if "mcp-session-id" in response.headers:
-                self.session_id = response.headers["mcp-session-id"]
-                logger.debug(f"Captured MCP session ID: {self.session_id}")
+                response.raise_for_status()
 
-            response.raise_for_status()
+                result = await response.json()
 
-            result = response.json()
+                if "error" in result:
+                    logger.error(f"MCP server error: {result['error']}")
+                    raise Exception(f"MCP server error: {result['error']}")
 
-            if "error" in result:
-                logger.error(f"MCP server error: {result['error']}")
-                raise Exception(f"MCP server error: {result['error']}")
+                return result.get("result", {})
 
-            return result.get("result", {})
-
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientError as e:
             logger.error(f"Error calling MCP server: {str(e)}")
             raise
 
-    def initialize(self) -> Dict[str, Any]:
+    async def initialize(self) -> Dict[str, Any]:
         """Initialize the MCP session."""
-        return self.send_request("initialize", {
+        return await self.send_request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {
                 "tools": {}
@@ -194,25 +200,25 @@ class MCPHTTPTransport(MCPTransport):
             }
         })
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> List[Dict[str, Any]]:
         """List available tools from the MCP server."""
         try:
             # Initialize session if not already done
             if not self.session_id:
-                init_result = self.initialize()
+                init_result = await self.initialize()
                 logger.info(f"Initialized MCP session: {init_result}")
 
-            result = self.send_request("tools/list", {})
+            result = await self.send_request("tools/list", {})
             return result.get("tools", [])
 
         except Exception as e:
             logger.error(f"Error listing tools: {str(e)}")
             raise
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool on the MCP server."""
         try:
-            result = self.send_request("tools/call", {
+            result = await self.send_request("tools/call", {
                 "name": tool_name,
                 "arguments": arguments
             })
@@ -230,6 +236,11 @@ class MCPHTTPTransport(MCPTransport):
             logger.error(f"Error calling tool {tool_name}: {str(e)}")
             raise
 
+    async def close(self):
+        """Close the HTTP session."""
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+
 
 class MCPSSETransport(MCPTransport):
     """Server-Sent Events transport for MCP servers.
@@ -243,9 +254,9 @@ class MCPSSETransport(MCPTransport):
         super().__init__(config)
         self.request_id = 0
         self.session_endpoint: Optional[str] = None
-        self.sse_stream = None
-        self.event_queue: Queue = Queue()
-        self.listener_thread: Optional[threading.Thread] = None
+        self._http_session: Optional[aiohttp.ClientSession] = None
+        self.event_queue: asyncio.Queue = asyncio.Queue()
+        self._listener_task: Optional[asyncio.Task] = None
         self.running = False
         self._initialized = False
 
@@ -254,25 +265,34 @@ class MCPSSETransport(MCPTransport):
         self.request_id += 1
         return self.request_id
 
-    def _listen_to_sse_events(self, response):
-        """Background thread to listen to SSE events and queue them."""
-        logger.info("[SSE] Listener thread started")
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create a reusable aiohttp session."""
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
+
+    async def _listen_to_sse_events(self, response: aiohttp.ClientResponse):
+        """Background task to listen to SSE events and queue them."""
+        logger.info("[SSE] Listener task started")
         try:
-            for line in response.iter_lines(decode_unicode=True):
+            async for line_bytes in response.content:
                 if not self.running:
                     logger.info("[SSE] Stopping listener (running=False)")
                     break
 
+                line = line_bytes.decode('utf-8', errors='replace').rstrip('\n\r')
                 if line:
-                    self.event_queue.put(line)
+                    await self.event_queue.put(line)
 
+        except asyncio.CancelledError:
+            logger.info("[SSE] Listener task cancelled")
         except Exception as e:
             logger.error(f"[SSE] Listener error: {e}")
-            self.event_queue.put(f"ERROR: {e}")
+            await self.event_queue.put(f"ERROR: {e}")
         finally:
-            logger.info("[SSE] Listener thread stopped")
+            logger.info("[SSE] Listener task stopped")
 
-    def _connect(self):
+    async def _connect(self):
         """Establish SSE connection and get session endpoint."""
         if not self.config.url:
             raise ValueError("URL is required for SSE transport")
@@ -285,47 +305,45 @@ class MCPSSETransport(MCPTransport):
             headers.update(self.config.auth.headers)
 
         # Connect to SSE endpoint
-        self.sse_stream = requests.get(
+        session = await self._get_session()
+        self._sse_response = await session.get(
             self.config.url,
             headers=headers,
-            stream=True,
-            timeout=300  # Long timeout for persistent connection
+            timeout=aiohttp.ClientTimeout(total=300)
         )
 
-        if self.sse_stream.status_code != 200:
+        if self._sse_response.status != 200:
             raise Exception(
-                f"SSE connection failed: {self.sse_stream.status_code}"
+                f"SSE connection failed: {self._sse_response.status}"
             )
 
-        logger.info(f"[SSE] Connected (Status: {self.sse_stream.status_code})")
+        logger.info(f"[SSE] Connected (Status: {self._sse_response.status})")
 
-        # Start listener thread
+        # Start listener task
         self.running = True
-        self.listener_thread = threading.Thread(
-            target=self._listen_to_sse_events,
-            args=(self.sse_stream,),
-            daemon=True
+        self._listener_task = asyncio.create_task(
+            self._listen_to_sse_events(self._sse_response)
         )
-        self.listener_thread.start()
 
         # Wait for session endpoint from SSE stream
         logger.info("[SSE] Waiting for session endpoint...")
-        timeout = time.time() + 10
+        deadline = time.time() + 10
 
-        while time.time() < timeout:
+        while time.time() < deadline:
             try:
-                line = self.event_queue.get(timeout=1)
+                remaining = max(0.1, deadline - time.time())
+                line = await asyncio.wait_for(self.event_queue.get(), timeout=remaining)
                 if 'data: /sse/message' in line or 'data: /' in line:
                     self.session_endpoint = line.split('data: ')[1].strip()
                     logger.info(f"[SSE] Got session endpoint: ...{self.session_endpoint[-40:]}")
                     break
-            except Empty:
+            except asyncio.TimeoutError:
                 continue
 
         if not self.session_endpoint:
             raise Exception("Failed to get SSE session endpoint")
 
-    def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send MCP JSON-RPC request over SSE.
 
         Sends a POST request to the session endpoint and waits for the
@@ -333,7 +351,7 @@ class MCPSSETransport(MCPTransport):
         """
         # Connect if not already connected
         if not self.session_endpoint:
-            self._connect()
+            await self._connect()
 
         req_id = self._next_request_id()
 
@@ -355,40 +373,42 @@ class MCPSSETransport(MCPTransport):
         logger.info(f"[SSE] Sending {method} (id:{req_id})")
 
         try:
-            response = requests.post(
+            session = await self._get_session()
+            async with session.post(
                 message_url,
                 json=message,
                 headers=headers,
-                timeout=self.config.timeout
-            )
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+            ) as response:
+                if response.status != 202:
+                    body = await response.text()
+                    logger.error(
+                        f"[SSE] Unexpected response: {response.status} - {body}"
+                    )
+                    raise Exception(
+                        f"SSE message not accepted: {response.status}"
+                    )
 
-            if response.status_code != 202:
-                logger.error(
-                    f"[SSE] Unexpected response: {response.status_code} - {response.text}"
-                )
-                raise Exception(
-                    f"SSE message not accepted: {response.status_code}"
-                )
+                logger.debug(f"[SSE] Message accepted, waiting for response (id:{req_id})")
 
-            logger.debug(f"[SSE] Message accepted, waiting for response (id:{req_id})")
-
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientError as e:
             logger.error(f"[SSE] Error sending message: {e}")
             raise
 
         # Wait for response from SSE stream
-        return self._wait_for_response(req_id)
+        return await self._wait_for_response(req_id)
 
-    def _wait_for_response(self, expected_id: int, timeout_sec: int = 30) -> Dict[str, Any]:
+    async def _wait_for_response(self, expected_id: int, timeout_sec: int = 30) -> Dict[str, Any]:
         """Wait for a JSON-RPC response with the expected ID from the SSE stream."""
         logger.debug(f"[SSE] Waiting for response (id:{expected_id})")
 
-        timeout = time.time() + timeout_sec
+        deadline = time.time() + timeout_sec
         response_data = None
 
-        while time.time() < timeout:
+        while time.time() < deadline:
             try:
-                line = self.event_queue.get(timeout=1)
+                remaining = max(0.1, deadline - time.time())
+                line = await asyncio.wait_for(self.event_queue.get(), timeout=remaining)
 
                 # Skip non-data lines
                 if not line.startswith('data: {'):
@@ -415,7 +435,7 @@ class MCPSSETransport(MCPTransport):
                     logger.warning(f"[SSE] Failed to parse JSON: {e}")
                     continue
 
-            except Empty:
+            except asyncio.TimeoutError:
                 continue
 
         if response_data is None:
@@ -425,12 +445,12 @@ class MCPSSETransport(MCPTransport):
 
         return response_data
 
-    def initialize(self) -> Dict[str, Any]:
+    async def initialize(self) -> Dict[str, Any]:
         """Initialize the MCP session."""
         if self._initialized:
             return {}
 
-        result = self.send_request("initialize", {
+        result = await self.send_request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {
                 "tools": {}
@@ -445,14 +465,14 @@ class MCPSSETransport(MCPTransport):
         logger.info(f"[SSE] Initialized MCP session")
         return result
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> List[Dict[str, Any]]:
         """List available tools from the MCP server."""
         try:
             # Initialize if not already done
             if not self._initialized:
-                self.initialize()
+                await self.initialize()
 
-            result = self.send_request("tools/list")
+            result = await self.send_request("tools/list")
             tools = result.get("tools", [])
 
             logger.info(f"[SSE] Listed {len(tools)} tools")
@@ -462,10 +482,10 @@ class MCPSSETransport(MCPTransport):
             logger.error(f"[SSE] Error listing tools: {e}")
             raise
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool on the MCP server."""
         try:
-            result = self.send_request("tools/call", {
+            result = await self.send_request("tools/call", {
                 "name": tool_name,
                 "arguments": arguments
             })
@@ -486,19 +506,20 @@ class MCPSSETransport(MCPTransport):
             logger.error(f"[SSE] Error calling tool {tool_name}: {e}")
             raise
 
-    def close(self):
+    async def close(self):
         """Close the SSE connection."""
         logger.info("[SSE] Closing connection")
         self.running = False
 
-        if self.sse_stream:
+        if self._listener_task and not self._listener_task.done():
+            self._listener_task.cancel()
             try:
-                self.sse_stream.close()
-            except:
+                await self._listener_task
+            except asyncio.CancelledError:
                 pass
 
-        if self.listener_thread and self.listener_thread.is_alive():
-            self.listener_thread.join(timeout=2)
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
 
         logger.info("[SSE] Connection closed")
 
