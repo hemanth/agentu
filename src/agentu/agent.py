@@ -1,7 +1,7 @@
 import json
 import asyncio
 import aiohttp
-from typing import List, Dict, Any, Optional, Callable, Union
+from typing import AsyncIterator, List, Dict, Any, Optional, Callable, Union
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -622,6 +622,118 @@ class Agent:
             except aiohttp.ClientError as e:
                 logger.error(f"Error calling LLM API: {str(e)}")
                 raise
+
+    async def _stream_llm(self, prompt: str) -> AsyncIterator[str]:
+        """Stream LLM response chunks via SSE.
+
+        Yields text chunks as they arrive from the OpenAI-compatible API.
+        """
+        with self.observer.trace(
+            EventType.LLM_REQUEST,
+            {"model": self.model, "prompt_length": len(prompt), "streaming": True}
+        ):
+            try:
+                headers = {"Content-Type": "application/json"}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+
+                session = await self._get_llm_session()
+                async with session.post(
+                    f"{self.api_base}/chat/completions",
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": self.temperature,
+                        "stream": True
+                    },
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=120)
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.content:
+                        decoded = line.decode("utf-8").strip()
+                        if not decoded or not decoded.startswith("data: "):
+                            continue
+                        data = decoded[6:]  # strip "data: "
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content")
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+
+            except aiohttp.ClientError as e:
+                logger.error(f"Error streaming LLM API: {str(e)}")
+                raise
+
+    async def stream(self, user_input: str) -> AsyncIterator[str]:
+        """Stream inference response as text chunks.
+
+        Unlike infer(), this streams the raw LLM response without tool execution.
+        Useful for conversational responses where you want real-time output.
+
+        Args:
+            user_input: Natural language query
+
+        Yields:
+            Text chunks as they arrive from the LLM
+
+        Example:
+            >>> async for chunk in agent.stream("Explain quantum computing"):
+            ...     print(chunk, end="", flush=True)
+        """
+        self.observer.record(EventType.INFERENCE_START, {"query": user_input, "streaming": True})
+
+        # Load deferred MCP tools on first use
+        if self._pending_mcp_config:
+            await self.with_mcp([self._pending_mcp_config])
+            self._pending_mcp_config = None
+
+        # Build prompt with context, memory, and skills
+        active_skills = self._match_skills(user_input)
+        context = self._build_turn_context(user_input, [], active_skills)
+
+        full_response = []
+        async for chunk in self._stream_llm(context):
+            full_response.append(chunk)
+            yield chunk
+
+        # Store in memory
+        collected = "".join(full_response)
+        if self.memory_enabled:
+            await asyncio.to_thread(
+                self.memory.remember,
+                content=f"User: {user_input}",
+                memory_type='conversation',
+                metadata={'role': 'user'},
+                importance=0.5
+            )
+            await asyncio.to_thread(
+                self.memory.remember,
+                content=f"Agent: {collected}",
+                memory_type='conversation',
+                metadata={'role': 'agent', 'streaming': True},
+                importance=0.6
+            )
+
+        # Cache the full response
+        if self.cache_enabled and self.cache:
+            self.cache.set(context, self.model, collected, temperature=self.temperature)
+
+        self.conversation_history.append({
+            "user_input": user_input,
+            "response": {"result": collected, "streaming": True},
+            "turns": 1
+        })
+
+        self.observer.record(
+            EventType.INFERENCE_END,
+            {"query": user_input, "streaming": True, "response_length": len(collected)}
+        )
 
     async def evaluate_tool_use(self, user_input: str) -> Dict[str, Any]:
         """Evaluate which tool to use based on user input (async)."""
