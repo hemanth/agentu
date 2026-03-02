@@ -3,6 +3,7 @@
 import time
 import json
 import sqlite3
+import hashlib
 import logging
 from collections import OrderedDict
 from typing import Optional, Dict, Any, Protocol, runtime_checkable
@@ -143,3 +144,131 @@ class SQLiteBackend:
             return {"backend": "sqlite", "entries": count, "db_path": self.db_path}
         finally:
             conn.close()
+
+
+class RedisBackend:
+    """Redis cache backend. Requires `pip install redis`."""
+
+    def __init__(self, url: str = "redis://localhost:6379", prefix: str = "agentu:cache:"):
+        self.url = url
+        self.prefix = prefix
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            try:
+                import redis
+                self._client = redis.from_url(self.url, decode_responses=True)
+                self._client.ping()
+            except Exception:
+                self._client = None
+        return self._client
+
+    async def get(self, key: str) -> Optional[dict]:
+        client = self._get_client()
+        if client is None:
+            return None
+        try:
+            val = client.get(self.prefix + key)
+            return json.loads(val) if val else None
+        except Exception:
+            logger.warning("Redis get failed", exc_info=True)
+            return None
+
+    async def set(self, key: str, value: dict, ttl: Optional[int] = None) -> None:
+        client = self._get_client()
+        if client is None:
+            return
+        try:
+            data = json.dumps(value)
+            if ttl is not None:
+                client.setex(self.prefix + key, ttl, data)
+            else:
+                client.set(self.prefix + key, data)
+        except Exception:
+            logger.warning("Redis set failed", exc_info=True)
+
+    async def delete(self, key: str) -> None:
+        client = self._get_client()
+        if client is None:
+            return
+        try:
+            client.delete(self.prefix + key)
+        except Exception:
+            logger.warning("Redis delete failed", exc_info=True)
+
+    async def clear(self) -> None:
+        client = self._get_client()
+        if client is None:
+            return
+        try:
+            keys = client.keys(self.prefix + "*")
+            if keys:
+                client.delete(*keys)
+        except Exception:
+            logger.warning("Redis clear failed", exc_info=True)
+
+    async def stats(self) -> Dict[str, Any]:
+        client = self._get_client()
+        if client is None:
+            return {"backend": "redis", "available": False}
+        try:
+            keys = client.keys(self.prefix + "*")
+            return {"backend": "redis", "available": True, "entries": len(keys)}
+        except Exception:
+            return {"backend": "redis", "available": False}
+
+
+class FilesystemBackend:
+    """Filesystem-based cache backend for large responses and offline use."""
+
+    def __init__(self, cache_dir: Optional[str] = None):
+        from pathlib import Path
+        if cache_dir is None:
+            cache_dir = str(Path.home() / ".agentu" / "cache_fs")
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _key_path(self, key: str):
+        safe_key = hashlib.sha256(key.encode()).hexdigest()
+        return self.cache_dir / f"{safe_key}.json"
+
+    async def get(self, key: str) -> Optional[dict]:
+        path = self._key_path(key)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            if data.get("expires_at") and time.time() > data["expires_at"]:
+                path.unlink(missing_ok=True)
+                return None
+            return data["value"]
+        except Exception:
+            return None
+
+    async def set(self, key: str, value: dict, ttl: Optional[int] = None) -> None:
+        path = self._key_path(key)
+        now = time.time()
+        data = {
+            "value": value,
+            "created_at": now,
+            "expires_at": now + ttl if ttl is not None else None,
+        }
+        try:
+            path.write_text(json.dumps(data))
+        except Exception:
+            logger.warning("Filesystem cache set failed", exc_info=True)
+
+    async def delete(self, key: str) -> None:
+        path = self._key_path(key)
+        path.unlink(missing_ok=True)
+
+    async def clear(self) -> None:
+        import shutil
+        if self.cache_dir.exists():
+            shutil.rmtree(self.cache_dir)
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    async def stats(self) -> Dict[str, Any]:
+        entries = len(list(self.cache_dir.glob("*.json")))
+        return {"backend": "filesystem", "entries": entries, "cache_dir": str(self.cache_dir)}

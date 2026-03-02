@@ -5,6 +5,7 @@ import pytest_asyncio
 import asyncio
 
 from agentu.cache_storage_backends import CacheStorageBackend, MemoryBackend, SQLiteBackend
+from agentu.cache_storage_backends import RedisBackend, FilesystemBackend
 
 
 class TestMemoryBackend:
@@ -106,4 +107,64 @@ class TestSQLiteBackend:
         await backend.set("k1", {"r": "1"})
         stats = await backend.stats()
         assert stats["backend"] == "sqlite"
+        assert stats["entries"] == 1
+
+
+class TestRedisBackend:
+    """Tests use no real Redis — test graceful degradation."""
+
+    @pytest.mark.asyncio
+    async def test_unavailable_gracefully(self):
+        backend = RedisBackend(url="redis://localhost:59999")
+        result = await backend.get("key")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_stats_when_unavailable(self):
+        backend = RedisBackend(url="redis://localhost:59999")
+        stats = await backend.stats()
+        assert stats["backend"] == "redis"
+        assert stats["available"] is False
+
+
+class TestFilesystemBackend:
+    @pytest_asyncio.fixture
+    async def backend(self, tmp_path):
+        return FilesystemBackend(cache_dir=str(tmp_path / "fs_cache"))
+
+    @pytest.mark.asyncio
+    async def test_get_miss(self, backend):
+        assert await backend.get("nonexistent") is None
+
+    @pytest.mark.asyncio
+    async def test_set_and_get(self, backend):
+        await backend.set("key1", {"response": "hello"})
+        result = await backend.get("key1")
+        assert result == {"response": "hello"}
+
+    @pytest.mark.asyncio
+    async def test_delete(self, backend):
+        await backend.set("key1", {"r": "1"})
+        await backend.delete("key1")
+        assert await backend.get("key1") is None
+
+    @pytest.mark.asyncio
+    async def test_clear(self, backend):
+        await backend.set("k1", {"r": "1"})
+        await backend.set("k2", {"r": "2"})
+        await backend.clear()
+        assert await backend.get("k1") is None
+
+    @pytest.mark.asyncio
+    async def test_ttl_expiration(self, backend):
+        import asyncio
+        await backend.set("key1", {"r": "1"}, ttl=0)
+        await asyncio.sleep(0.1)
+        assert await backend.get("key1") is None
+
+    @pytest.mark.asyncio
+    async def test_stats(self, backend):
+        await backend.set("k1", {"r": "1"})
+        stats = await backend.stats()
+        assert stats["backend"] == "filesystem"
         assert stats["entries"] == 1
