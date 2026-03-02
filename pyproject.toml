@@ -37,6 +37,16 @@ dev = [
     "pytest-asyncio>=0.21",
     "httpx>=0.24.0",
 ]
+semantic = [
+    "sentence-transformers>=2.2.0",
+]
+redis = [
+    "redis>=4.0.0",
+]
+cache-all = [
+    "sentence-transformers>=2.2.0",
+    "redis>=4.0.0",
+]
 
 [project.scripts]
 agentu = "agentu.cli:main"

@@ -14,6 +14,11 @@ from .session import Session, SessionManager
 from .eval import evaluate, EvalResult, FailedCase
 from .ralph import ralph, ralph_resume, RalphRunner, RalphConfig
 from .cache import LLMCache, CacheStats
+from .cache_storage_backends import CacheStorageBackend, MemoryBackend, SQLiteBackend, RedisBackend, FilesystemBackend
+from .cache_embeddings import EmbeddingProvider, LocalEmbedding, APIEmbedding, FakeEmbedding, cosine_similarity
+from .cache_semantic import SemanticIndex
+from .cache_tiered import TieredCache
+from .cache_sync import CacheSync
 from .workflow import Step, SequentialStep, ParallelStep, WorkflowCheckpoint, resume_workflow
 from . import observe
 
@@ -53,6 +58,19 @@ __all__ = [
     "RalphConfig",
     "LLMCache",
     "CacheStats",
+    "CacheStorageBackend",
+    "MemoryBackend",
+    "SQLiteBackend",
+    "RedisBackend",
+    "FilesystemBackend",
+    "EmbeddingProvider",
+    "LocalEmbedding",
+    "APIEmbedding",
+    "FakeEmbedding",
+    "cosine_similarity",
+    "SemanticIndex",
+    "TieredCache",
+    "CacheSync",
     "Step",
     "SequentialStep",
     "ParallelStep",
