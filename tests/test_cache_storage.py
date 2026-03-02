@@ -4,7 +4,7 @@ import pytest
 import pytest_asyncio
 import asyncio
 
-from agentu.cache_storage_backends import CacheStorageBackend, MemoryBackend
+from agentu.cache_storage_backends import CacheStorageBackend, MemoryBackend, SQLiteBackend
 
 
 class TestMemoryBackend:
@@ -57,3 +57,53 @@ class TestMemoryBackend:
         await backend.set("key1", {"r": "1"}, ttl=0)
         await asyncio.sleep(0.1)
         assert await backend.get("key1") is None
+
+
+class TestSQLiteBackend:
+    @pytest_asyncio.fixture
+    async def backend(self, tmp_path):
+        return SQLiteBackend(db_path=str(tmp_path / "test.db"))
+
+    @pytest.mark.asyncio
+    async def test_get_miss(self, backend):
+        assert await backend.get("nonexistent") is None
+
+    @pytest.mark.asyncio
+    async def test_set_and_get(self, backend):
+        await backend.set("key1", {"response": "hello"})
+        result = await backend.get("key1")
+        assert result == {"response": "hello"}
+
+    @pytest.mark.asyncio
+    async def test_delete(self, backend):
+        await backend.set("key1", {"response": "hello"})
+        await backend.delete("key1")
+        assert await backend.get("key1") is None
+
+    @pytest.mark.asyncio
+    async def test_clear(self, backend):
+        await backend.set("k1", {"r": "1"})
+        await backend.set("k2", {"r": "2"})
+        await backend.clear()
+        assert await backend.get("k1") is None
+
+    @pytest.mark.asyncio
+    async def test_ttl_expiration(self, backend):
+        await backend.set("key1", {"r": "1"}, ttl=0)
+        await asyncio.sleep(0.1)
+        assert await backend.get("key1") is None
+
+    @pytest.mark.asyncio
+    async def test_persistence(self, tmp_path):
+        db = str(tmp_path / "persist.db")
+        b1 = SQLiteBackend(db_path=db)
+        await b1.set("key1", {"r": "1"})
+        b2 = SQLiteBackend(db_path=db)
+        assert await b2.get("key1") == {"r": "1"}
+
+    @pytest.mark.asyncio
+    async def test_stats(self, backend):
+        await backend.set("k1", {"r": "1"})
+        stats = await backend.stats()
+        assert stats["backend"] == "sqlite"
+        assert stats["entries"] == 1
