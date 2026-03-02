@@ -186,7 +186,7 @@ async def test_stream_caches_full_response(agent):
     """stream() caches the complete response after streaming."""
     agent.cache_enabled = True
     agent.cache = MagicMock()
-    agent.cache.set = MagicMock()
+    agent.cache.set = AsyncMock()
 
     agent._llm_session = _make_mock_session(make_sse_lines(["one", " two"]))
 

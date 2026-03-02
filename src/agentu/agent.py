@@ -13,7 +13,6 @@ from .memory import Memory
 from .workflow import Step
 from .skill import Skill, load_skill
 from .observe import Observer, EventType, get_config
-from .cache import LLMCache
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -144,7 +143,16 @@ class Agent:
         
         # Initialize cache if enabled
         self.cache_enabled = cache
-        self.cache = LLMCache(ttl=cache_ttl) if cache else None
+        if cache:
+            from .cache_tiered import TieredCache
+            from .cache_storage_backends import MemoryBackend, SQLiteBackend
+            self.cache = TieredCache(
+                backends=[MemoryBackend(), SQLiteBackend()],
+                ttl=cache_ttl,
+            )
+        else:
+            self.cache = None
+        self._cache_sync = None
 
         # Reusable aiohttp session for LLM calls
         self._llm_session: Optional[aiohttp.ClientSession] = None
@@ -261,6 +269,85 @@ class Agent:
             self._ensure_search_tool()
 
         return self
+
+    def with_cache(self, preset: Optional[str] = None, ttl: int = 3600,
+                   similarity_threshold: float = 0.95, embedding_provider: str = "local",
+                   embedding_model: Optional[str] = None, redis_url: str = "redis://localhost:6379",
+                   sync_enabled: bool = False, sync_path: Optional[str] = None,
+                   sync_interval: int = 300) -> 'Agent':
+        """Configure smart caching with presets.
+
+        Presets:
+            - "basic": memory + sqlite (default, same as cache=True)
+            - "smart": memory + sqlite + local semantic matching
+            - "offline": memory + sqlite + filesystem + semantic + background sync
+            - "distributed": memory + redis + api semantic matching
+        """
+        from .cache_storage_backends import MemoryBackend, SQLiteBackend, RedisBackend, FilesystemBackend
+        from .cache_tiered import TieredCache
+
+        if preset is None:
+            preset = "basic"
+
+        backends = []
+        semantic_index = None
+
+        if preset == "basic":
+            backends = [MemoryBackend(), SQLiteBackend()]
+        elif preset == "smart":
+            backends = [MemoryBackend(), SQLiteBackend()]
+            semantic_index = self._build_semantic_index(
+                embedding_provider, embedding_model, similarity_threshold
+            )
+        elif preset == "offline":
+            backends = [MemoryBackend(), SQLiteBackend(), FilesystemBackend()]
+            semantic_index = self._build_semantic_index(
+                embedding_provider, embedding_model, similarity_threshold
+            )
+            sync_enabled = True
+        elif preset == "distributed":
+            backends = [MemoryBackend(), RedisBackend(url=redis_url)]
+            semantic_index = self._build_semantic_index(
+                "api", embedding_model, similarity_threshold
+            )
+
+        self.cache = TieredCache(backends=backends, ttl=ttl, semantic_index=semantic_index)
+        self.cache_enabled = True
+
+        if sync_enabled:
+            from .cache_sync import CacheSync
+            sqlite_backend = next((b for b in backends if isinstance(b, SQLiteBackend)), None)
+            if sqlite_backend:
+                if sync_path is None:
+                    from pathlib import Path
+                    sync_path = str(Path.home() / ".agentu" / "cache_sync")
+                self._cache_sync = CacheSync(
+                    source_backend=sqlite_backend,
+                    sync_path=sync_path,
+                    sync_interval=sync_interval,
+                )
+
+        return self
+
+    def _build_semantic_index(self, provider_type: str, model: Optional[str],
+                              threshold: float):
+        from .cache_semantic import SemanticIndex
+        from .cache_embeddings import LocalEmbedding, APIEmbedding
+
+        if provider_type == "local":
+            provider = LocalEmbedding(model_name=model or "all-MiniLM-L6-v2")
+            if not provider.available():
+                import logging
+                logging.getLogger(__name__).warning(
+                    "sentence-transformers not installed, semantic caching disabled"
+                )
+                return None
+        else:
+            provider = APIEmbedding(
+                api_base=self.api_base, model=model or "nomic-embed-text", api_key=self.api_key
+            )
+
+        return SemanticIndex(embedding_provider=provider, threshold=threshold)
 
     async def with_mcp(self, servers: List[Union[str, Dict[str, Any]]]) -> 'Agent':
         """Connect to MCP servers and load their tools (chainable, async).
@@ -574,7 +661,7 @@ class Agent:
         """Make an async API call to OpenAI-compatible endpoint."""
         # Check cache first if enabled
         if self.cache_enabled and self.cache:
-            cached = self.cache.get(prompt, self.model, temperature=self.temperature)
+            cached = await self.cache.get(prompt, self.model, temperature=self.temperature)
             if cached is not None:
                 logger.debug(f"Cache hit for prompt (len={len(prompt)})")
                 return cached
@@ -615,7 +702,7 @@ class Agent:
 
                     # Store in cache if enabled
                     if self.cache_enabled and self.cache:
-                        self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
+                        await self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
 
                     return full_response
 
@@ -722,7 +809,7 @@ class Agent:
 
         # Cache the full response
         if self.cache_enabled and self.cache:
-            self.cache.set(context, self.model, collected, temperature=self.temperature)
+            await self.cache.set(context, self.model, collected, temperature=self.temperature)
 
         self.conversation_history.append({
             "user_input": user_input,
