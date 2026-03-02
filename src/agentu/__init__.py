@@ -22,7 +22,7 @@ from .cache_sync import CacheSync
 from .workflow import Step, SequentialStep, ParallelStep, WorkflowCheckpoint, resume_workflow
 from . import observe
 
-__version__ = "1.10.0"
+__version__ = "1.11.0"
 __all__ = [
     "Agent",
     "Tool",

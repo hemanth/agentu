@@ -5,6 +5,38 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-03-02
+
+### Added
+
+- **Smart caching system** with semantic matching, tiered storage, and background sync
+- **`Agent.with_cache(preset=...)`** fluent method with four presets:
+  - `"basic"` — memory + SQLite (default, same as `cache=True`)
+  - `"smart"` — memory + SQLite + local semantic matching
+  - `"offline"` — memory + SQLite + filesystem + semantic + background sync
+  - `"distributed"` — memory + Redis + API semantic matching
+- **Pluggable storage backends** — `MemoryBackend`, `SQLiteBackend`, `RedisBackend`, `FilesystemBackend` via `CacheStorageBackend` protocol
+- **Configurable embedding providers** — `LocalEmbedding` (sentence-transformers), `APIEmbedding` (OpenAI-compatible), `FakeEmbedding` (testing)
+- **`SemanticIndex`** — cosine similarity search over cached prompts with configurable threshold (default 0.95)
+- **`TieredCache`** — orchestrator with exact-match fast path, tier promotion, and optional semantic fallback
+- **`CacheSync`** — background daemon that snapshots cache to disk on interval for offline/warm-start scenarios
+- **Extended cache stats** — exact hits, semantic hits, misses, hit rate, per-tier hit counts, embedding count
+- **Optional dependencies** — `pip install agentu[semantic]`, `agentu[redis]`, `agentu[cache-all]`
+- 40+ new cache tests
+
+### Example
+
+```python
+# Preset-based smart caching
+agent = Agent("bot").with_cache(preset="smart")
+
+# Offline mode with background sync
+agent = Agent("bot").with_cache(preset="offline")
+
+# Backward compatible
+agent = Agent("bot", cache=True, cache_ttl=3600)
+```
+
 ## [1.10.0] - 2026-02-06
 
 ### Added
