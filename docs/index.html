@@ -7,6 +7,7 @@
   <meta name="description" content="Build AI agents with tools, workflows, memory, caching, evaluation, and observability. Two operators. Zero boilerplate.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -85,10 +86,10 @@
       font-size: 13px; line-height: 1.7; color: var(--text-secondary);
       overflow-x: auto;
     }
-    .hero-code .kw { color: var(--text-muted); }
+    .hero-code .kw { color: #888; }
     .hero-code .fn { color: var(--white); }
-    .hero-code .str { color: var(--text-secondary); }
-    .hero-code .cmt { color: #444; }
+    .hero-code .str { color: #b0b0b0; }
+    .hero-code .cmt { color: #555; font-style: italic; }
 
     .hero-actions {
       display: flex; gap: 12px; margin-top: 32px;
@@ -166,21 +167,36 @@
     .code-block {
       background: var(--bg-code); border: 1px solid var(--border);
       border-radius: var(--radius); overflow: hidden;
+      position: relative;
     }
     .code-header {
       font-size: 11px; font-weight: 600; padding: 10px 16px;
       border-bottom: 1px solid var(--border); color: var(--text-muted);
       text-transform: uppercase; letter-spacing: 1px;
+      display: flex; justify-content: space-between; align-items: center;
     }
+    .copy-btn {
+      background: none; border: 1px solid var(--border); color: var(--text-muted);
+      font-size: 10px; padding: 3px 10px; border-radius: 4px;
+      cursor: pointer; font-family: 'JetBrains Mono', monospace;
+      text-transform: none; letter-spacing: 0;
+      transition: all 0.15s;
+    }
+    .copy-btn:hover { border-color: var(--border-hover); color: var(--white); }
+    .copy-btn.copied { color: var(--green); border-color: var(--green); }
     .code-body {
-      padding: 16px; font-size: 12px; line-height: 1.7;
+      padding: 16px; font-size: 12.5px; line-height: 1.8;
       color: var(--text-secondary); overflow-x: auto; white-space: pre;
+      tab-size: 4; -moz-tab-size: 4;
     }
-    .code-body .kw { color: var(--text-muted); }
+    .code-body .kw { color: #888; }
     .code-body .fn { color: var(--white); }
-    .code-body .str { color: var(--text-secondary); }
-    .code-body .cmt { color: #444; }
+    .code-body .str { color: #b0b0b0; }
+    .code-body .cmt { color: #555; font-style: italic; }
     .code-body .hl { color: var(--white); font-weight: 500; }
+    .code-body .num { color: #ccc; }
+    .code-body .op { color: #ddd; }
+    .code-body .dec { color: #888; }
 
     .code-full { grid-column: 1 / -1; }
 
@@ -829,6 +845,27 @@ agent.<span class="fn">with_mcp</span>([{<span class="str">"url"</span>: <span c
     <a href="https://github.com/hemanth/agentu/tree/main/examples" target="_blank">Examples</a>
   </div>
 </footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+<script>
+// Add copy buttons to all code blocks
+document.querySelectorAll('.code-header').forEach(header => {
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = 'copy';
+  btn.addEventListener('click', () => {
+    const body = header.nextElementSibling;
+    const text = body.textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'copied';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 2000);
+    });
+  });
+  header.appendChild(btn);
+});
+</script>
 
 </body>
 </html>
