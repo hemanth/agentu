@@ -282,8 +282,7 @@
     Tools, workflows, memory, caching, sessions, evaluation, and observability.
     Two operators. Zero boilerplate. Works with any OpenAI-compatible model.
   </p>
-  <div class="hero-code">
-    <span class="kw">from</span> <span class="fn">agentu</span> <span class="kw">import</span> Agent
+  <div class="hero-code"><span class="kw">from</span> <span class="fn">agentu</span> <span class="kw">import</span> Agent
 
 <span class="cmt"># Define a tool — any Python function</span>
 <span class="kw">def</span> <span class="fn">search_products</span>(query: <span class="str">str</span>) -> <span class="str">list</span>:
@@ -293,8 +292,7 @@
 agent = <span class="fn">Agent</span>(<span class="str">"sales"</span>).with_tools([search_products])
 
 <span class="cmt"># Natural language — LLM picks the tool + params</span>
-result = <span class="kw">await</span> agent.<span class="fn">infer</span>(<span class="str">"Find laptops under $1500"</span>)
-  </div>
+result = <span class="kw">await</span> agent.<span class="fn">infer</span>(<span class="str">"Find laptops under $1500"</span>)</div>
   <div class="hero-actions">
     <a href="https://pypi.org/project/agentu/" class="btn-primary" target="_blank">Install from PyPI</a>
     <a href="https://github.com/hemanth/agentu" class="btn-secondary" target="_blank">View Source</a>
