@@ -1,15 +1,14 @@
 # agentu
 
-**The sleekest way to build AI agents.**
+Build AI agents that actually do things.
 
 ```bash
 pip install agentu
 ```
 
-## Why agentu?
+## Quick start
 
 ```python
-# This is all you need:
 from agentu import Agent
 
 def search_products(query: str) -> list:
@@ -17,108 +16,147 @@ def search_products(query: str) -> list:
 
 agent = Agent("sales").with_tools([search_products])
 
-# Direct execution
+# Call a tool directly
 result = await agent.call("search_products", {"query": "laptop"})
 
-# Natural language (LLM figures out the tool + params)
+# Or let the LLM figure it out
 result = await agent.infer("Find me laptops under $1500")
 ```
 
-## Workflows in 3 Lines
+`call()` runs a tool. `infer()` lets the LLM pick the tool and fill in the parameters from natural language.
+
+## Workflows
+
+Chain agents with `>>` (sequential) and `&` (parallel):
 
 ```python
-# Sequential: researcher → analyst → writer
+# One after another
 workflow = researcher("Find AI trends") >> analyst("Analyze") >> writer("Summarize")
 
-# Parallel: run 3 searches concurrently
+# All at once
 workflow = search("AI") & search("ML") & search("Crypto")
 
-# Combined: parallel then merge
-workflow = (search("AI") & search("ML") & search("Crypto")) >> analyst("Compare")
+# Parallel first, then merge
+workflow = (search("AI") & search("ML")) >> analyst("Compare findings")
 
 result = await workflow.run()
 ```
 
-**`>>` chains steps. `&` runs in parallel.** That's the entire API.
+You can also pass data between steps with lambdas:
+
+```python
+workflow = (
+    researcher("Find companies")
+    >> analyst(lambda prev: f"Extract top 5 from: {prev['result']}")
+    >> writer(lambda prev: f"Write report about: {prev['companies']}")
+)
+```
+
+Interrupted workflows can resume from the last successful step:
+
+```python
+from agentu import resume_workflow
+
+result = await workflow.run(checkpoint="./checkpoints", workflow_id="my-report")
+
+# After a crash, pick up where you left off
+await resume_workflow(result["checkpoint_path"])
+```
+
+## Caching
+
+Cache LLM responses to skip redundant API calls. Works with both plain strings and full conversations.
+
+```python
+# Basic: memory + SQLite, 1-hour TTL
+agent = Agent("assistant").with_cache()
+
+# Same prompt, same response — no API call
+await agent.infer("What is Python?")  # hits the LLM
+await agent.infer("What is Python?")  # instant, from cache
+```
+
+### Presets
+
+```python
+# Exact match only (memory + SQLite)
+agent.with_cache(preset="basic")
+
+# Semantic matching — "vegan food" hits cache for "plant-based meals"
+agent.with_cache(preset="smart", similarity_threshold=0.9)
+
+# Offline-friendly with filesystem backup and background sync
+agent.with_cache(preset="offline")
+
+# Redis-backed for distributed setups
+agent.with_cache(preset="distributed", redis_url="redis://localhost:6379")
+```
+
+### Conversation caching
+
+Full conversation lists cache the same way strings do — deterministic serialization, same hash, same hit:
+
+```python
+conversation = [
+    {"role": "user", "content": "Hello!"},
+    {"role": "assistant", "content": "Hi there!"},
+    {"role": "user", "content": "What's the weather?"},
+]
+cache.set(conversation, "my-bot", "Looks sunny today.")
+cache.get(conversation, "my-bot")  # → "Looks sunny today."
+```
+
+The second parameter is a `namespace` — any string that scopes the cache. Usually the model name, but it can be anything.
+
+### How matching works
+
+| Strategy | How | When |
+|---|---|---|
+| Exact | SHA-256 hash of prompt + namespace + temperature | Default, always runs first |
+| Semantic | Cosine similarity of embedding vectors | `preset="smart"` or higher, runs on exact miss |
+
+Semantic matching uses an embedding model (local `all-MiniLM-L6-v2` or API-based `nomic-embed-text`) and only returns a hit when similarity exceeds the threshold (default 0.95).
 
 ## Memory
 
 ```python
 agent.remember("Customer prefers email", importance=0.9)
-memories = agent.recall(query="email")
+memories = agent.recall(query="communication preferences")
 ```
 
-Stored in SQLite. Searchable. Persistent.
+SQLite-backed, searchable, persistent across sessions.
 
-## Caching: Save Time & Money
+## Skills
 
-**NEW in v1.7.0**: Transparent LLM response caching with TTL.
-
-```python
-# Enable caching with 1 hour TTL
-agent = Agent("assistant", cache=True)
-agent = Agent("assistant", cache=True, cache_ttl=7200)  # 2 hours
-
-# Same prompt = cache hit, no API call
-await agent.infer("What is Python?")  # API call, cached
-await agent.infer("What is Python?")  # Instant cache hit!
-
-# Check stats
-print(agent.cache.get_stats())  # {"hits": 10, "misses": 5, "hit_rate": 0.667}
-```
-
-Uses SQLite. Exact match on prompt + model + temperature.
-
-## Workflow Resume
-
-**NEW in v1.7.0**: Resume interrupted workflows from the last step.
+Load domain expertise on demand, either from local paths or GitHub:
 
 ```python
-from agentu import resume_workflow
+from agentu import Agent, Skill
 
-# Run with checkpoints (use custom workflow_id for easy identification)
-workflow = researcher("Find") >> analyst("Analyze") >> writer("Write")
-result = await workflow.run(checkpoint="./checkpoints", workflow_id="my-report")
-
-# checkpoint_path is returned for easy resume
-print(result["checkpoint_path"])  # ./checkpoints/workflow_my-report.json
-
-# After crash, resume from last successful step
-await resume_workflow(result["checkpoint_path"])
-```
-
-## GitHub Skills
-
-**NEW in v1.8.0**: Import reusable skills directly from GitHub.
-
-```python
-# Shorthand format (recommended)
+# From GitHub (cached locally at ~/.agentu/skills/)
 agent = Agent("assistant").with_skills([
     "hemanth/agentu-skills/pdf-processor",
-    "openai/skills/code-review@v1.0",  # with branch/tag
+    "openai/skills/code-review@v1.0",
 ])
 
-# Or from local paths
+# From local
 agent = Agent("assistant").with_skills(["./skills/my-skill"])
 
-# Full URLs also supported
-agent = Agent("assistant").with_skills([
-    "https://github.com/hemanth/skills/tree/main/web-scraper",
-])
+# Or define inline
+pdf_skill = Skill(
+    name="pdf-processing",
+    description="Extract text and tables from PDF files",
+    instructions="skills/pdf/SKILL.md",
+    resources={"forms": "skills/pdf/FORMS.md"}
+)
+agent = Agent("assistant").with_skills([pdf_skill])
 ```
 
-Skills are cached locally at `~/.agentu/skills/`. Structure:
+Skills load progressively: metadata first (100 chars), then instructions (1500 chars), then resources only when needed.
 
-```
-my-skill/
-├── skill.json        # {"name": "...", "description": "..."}
-├── SKILL.md          # Instructions loaded when triggered
-└── resources/        # On-demand resources
-```
+## Sessions
 
-## Sessions: Stateful Intelligence
-
-**NEW in v1.3.0**: Server-managed conversations that remember everything.
+Stateful conversations with automatic context:
 
 ```python
 from agentu import SessionManager
@@ -126,23 +164,15 @@ from agentu import SessionManager
 manager = SessionManager()
 session = manager.create_session(agent)
 
-# First turn
 await session.send("What's the weather in SF?")
-
-# Later turn - context automatically remembered!
-await session.send("What about tomorrow?")
-# Agent knows "tomorrow" refers to SF weather
+await session.send("What about tomorrow?")  # knows you mean SF
 ```
 
-**Features:**
-- Automatic context preservation
-- Multi-user isolation
-- SQLite persistence per session
-- Session timeout handling
+Multi-user isolation, SQLite persistence, session timeout handling.
 
-## Evaluation: Test Your Agents
+## Evaluation
 
-**NEW in v1.4.0**: Simple testing framework with multiple matching strategies.
+Test your agents with simple assertions:
 
 ```python
 from agentu import evaluate
@@ -154,303 +184,146 @@ test_cases = [
 
 results = await evaluate(agent, test_cases)
 print(f"Accuracy: {results.accuracy}%")
-print(results.to_json())  # Export for CI/CD
+print(results.to_json())  # export for CI/CD
 ```
 
-**Matching strategies:**
-- Exact match
-- Substring match
-- LLM-as-judge (semantic similarity)
-- Custom validators
+Matching strategies: exact, substring, LLM-as-judge, or custom validators.
 
-Outputs color-coded results and exports JSON for continuous integration.
+## Observability
 
-## Ralph Mode: Autonomous Loops
-
-**NEW in v1.6.0**: Run agents in continuous autonomous loops.
+All LLM calls and tool executions are tracked automatically:
 
 ```python
-# Define your goal in a PROMPT.md file with checkpoints
+from agentu import Agent, observe
+
+observe.configure(output="console")  # or "json" or "silent"
+
+agent = Agent("assistant").with_tools([...])
+await agent.infer("Find me laptops")
+
+metrics = agent.observer.get_metrics()
+# {"tool_calls": 3, "total_duration_ms": 1240, "errors": 0}
+```
+
+### Dashboard
+
+```python
+from agentu import serve
+
+serve(agent, port=8000)
+# http://localhost:8000/dashboard — live metrics
+# http://localhost:8000/docs — auto-generated API docs
+```
+
+## Ralph mode
+
+Run agents in autonomous loops with progress tracking:
+
+```python
 result = await agent.ralph(
     prompt_file="PROMPT.md",
     max_iterations=50,
     timeout_minutes=30,
     on_iteration=lambda i, data: print(f"[{i}] {data['result'][:50]}...")
 )
-
-print(f"Completed in {result['iterations']} iterations")
 ```
 
-**Progress tracking:** Use `on_iteration` callback to monitor each loop.
+The agent loops until all checkpoints in `PROMPT.md` are complete or limits are reached.
 
-**PROMPT.md format:**
-```markdown
-# Goal
-Build a REST API for user auth.
+## Tool search
 
-## Checkpoints
-- [ ] Create user model
-- [ ] Implement login endpoint
-- [ ] Add tests
-```
-
-The agent loops until all checkpoints are complete or limits are reached.
-
-## Observability: Track Everything
-
-**NEW in v1.5.0**: Built-in monitoring for debugging and production.
+When you have hundreds of tools, you don't want them all in context. Deferred tools are discovered on-demand:
 
 ```python
-from agentu import Agent, observe
+agent = Agent("payments").with_tools(defer=[charge_card, send_receipt, refund_payment])
 
-# Configure output
-observe.configure(output="console")  # json | console | silent
-
-agent = Agent("assistant").with_tools([...])
-
-# All tool calls and LLM requests automatically tracked
-await agent.infer("Find me laptops")
-
-# View metrics
-metrics = agent.observer.get_metrics()
-print(f"Tool calls: {metrics['tool_calls']}")
-print(f"Duration: {metrics['total_duration_ms']}ms")
-print(f"Errors: {metrics['errors']}")
+# Agent calls search_tools("charge card") → finds charge_card → executes it
+result = await agent.infer("charge $50 to card_123")
 ```
 
-**Real-time Dashboard:**
+A `search_tools` function is auto-added. The agent searches, activates, and calls — all internally.
+
+## MCP
+
+Connect to Model Context Protocol servers:
+
 ```python
-from agentu import serve
-
-serve(agent, port=8000)
-# Dashboard: http://localhost:8000/dashboard
-# API Docs: http://localhost:8000/docs
+agent = await Agent("bot").with_mcp(["http://localhost:3000"])
+agent = await Agent("bot").with_mcp([
+    {"url": "https://api.com/mcp", "headers": {"Auth": "Bearer xyz"}}
+])
 ```
 
-Features:
-- **Auto-instrumentation** - All LLM calls and tool executions tracked
-- **Real-time dashboard** - Black/white minimalist UI with live metrics
-- **Event types**: `tool_call`, `llm_request`, `inference_start/end`, `error`
-- **Output formats**: Console (colored), JSON (structured), Silent (metrics only)
-- **Integrated server** - Dashboard built into FastAPI `/dashboard` endpoint
+## LLM support
 
-Perfect for debugging, performance monitoring, and production observability.
+Works with any OpenAI-compatible API. Auto-detects available models from Ollama:
+
+```python
+Agent("assistant")                                        # first available Ollama model
+Agent("assistant", model="qwen3")                         # specific model
+Agent("assistant", model="gpt-4", api_key="sk-...")       # OpenAI
+Agent("assistant", model="mistral", api_base="http://localhost:8000/v1")  # vLLM, LM Studio, etc.
+```
 
 ## REST API
 
 ```python
 from agentu import serve
 
-serve(agent, port=8000)
-# curl -X POST localhost:8000/execute -d '{"tool_name": "search_products", ...}'
-```
-
-Auto-generated Swagger docs at `/docs`.
-
-## Real-World Example: Automated Code Review
-
-```python
-import asyncio
-from agentu import Agent
-
-def get_pr_diff(pr_number: int) -> str:
-    """Fetch PR changes from GitHub."""
-    # GitHub API integration
-    return "diff --git a/src/auth.py... +added_line -removed_line"
-
-def run_tests(branch: str) -> dict:
-    """Run test suite."""
-    return {"passed": 47, "failed": 2, "coverage": 94.2}
-
-def post_comment(pr_number: int, comment: str) -> bool:
-    """Post review comment to GitHub."""
-    return True
-
-async def main():
-    # Setup agents
-    reviewer = Agent("reviewer", model="gpt-4").with_tools([get_pr_diff])
-    tester = Agent("tester").with_tools([run_tests])
-    commenter = Agent("commenter").with_tools([post_comment])
-
-    # Parallel: review code + run tests
-    workflow = reviewer("Review PR #247") & tester("Run tests on PR #247")
-    code_review, test_results = await workflow.run()
-
-    # Natural language: synthesize findings
-    summary = await commenter.infer(
-        f"Create a review comment for PR #247. "
-        f"Code review: {code_review}. Tests: {test_results}. "
-        f"Be constructive and specific."
-    )
-
-    # Post to GitHub
-    await commenter.call("post_comment", {"pr_number": 247, "comment": summary})
-    print("✓ Review posted to PR #247")
-
-asyncio.run(main())
-```
-
-**What this does:**
-- Reviews code and runs tests **in parallel** (saves time)
-- Uses `infer()` to write **human-quality review comments**
-- Posts directly to GitHub
-- **Zero manual work** - runs on every PR
-
-## Advanced: Lambda Control
-
-Need precise data flow? Use lambdas:
-
-```python
-workflow = (
-    researcher("Find companies")
-    >> analyst(lambda prev: f"Extract top 5 from: {prev['result']}")
-    >> writer(lambda prev: f"Write report about: {prev['companies']}")
-)
-```
-
-## Skills: 96% Less Context
-
-**NEW in v1.2.1**: Domain expertise that loads on-demand.
-
-```python
-from agentu import Agent, Skill
-
-pdf_skill = Skill(
-    name="pdf-processing",
-    description="Extract text and tables from PDF files",
-    instructions="skills/pdf/SKILL.md",
-    resources={"forms": "skills/pdf/FORMS.md"}
-)
-
-agent = Agent("assistant").with_skills([pdf_skill])
-
-# Skills auto-activate on matching prompts
-await agent.infer("Extract tables from report.pdf")
-```
-
-**Progressive loading:** Metadata (100 chars) → Instructions (1500 chars) → Resources (on-demand)
-
-**Result:** 100+ skills, minimal context footprint.
-
-## LLM Support
-
-Works with any OpenAI-compatible API. **Auto-detects available models** from Ollama:
-
-```python
-# Auto-detect (uses first available Ollama model)
-Agent("assistant")
-
-# Explicit model
-Agent("assistant", model="qwen3")
-
-# OpenAI
-Agent("assistant", model="gpt-4", api_key="sk-...")
-
-# vLLM, LM Studio, etc.
-Agent("assistant", model="mistral", api_base="http://localhost:8000/v1")
-```
-
-## Tool Search
-
-Scale to hundreds of tools without context bloat. Deferred tools are discovered on-demand:
-
-```python
-def charge_card(amount: float, card_id: str) -> dict:
-    """Charge a credit card."""
-    return {"status": "success", "amount": amount}
-
-def send_receipt(email: str, transaction_id: str) -> bool:
-    """Send receipt via email."""
-    return True
-
-def refund_payment(transaction_id: str) -> dict:
-    """Refund a payment transaction."""
-    return {"refunded": True}
-
-# 3 payment tools deferred, discovered when needed
-agent = Agent("payments").with_tools(defer=[charge_card, send_receipt, refund_payment])
-
-result = await agent.infer("charge $50 to card_123")
-# Agent calls search_tools("charge card") → activates charge_card → executes it
-```
-
-When `defer` is used, a `search_tools` function is auto-added. The agent searches for relevant tools, activates them, then calls them. Multi-turn happens internally.
-
-## MCP Integration
-
-Connect to Model Context Protocol servers:
-
-```python
-agent.with_mcp(["http://localhost:3000"])
-agent.with_mcp([{"url": "https://api.com/mcp", "headers": {"Auth": "token"}}])
-```
-
-## API Reference
-
-### Agent
-```python
-agent = Agent(name)                      # Auto-detects model from Ollama
-agent = Agent(name, model="qwen3")       # Or specify explicitly
-agent = Agent(name, max_turns=5)         # Limit multi-turn inference
-agent.with_tools([func1, func2])         # Add active tools
-agent.with_tools(defer=[many_funcs])     # Add searchable tools
-agent.with_tools([core], defer=[many])   # Both in one call
-agent.with_mcp([url])                    # Connect MCP servers
-
-await agent.call("tool", params)         # Direct execution
-await agent.infer("natural language")    # LLM routing (multi-turn)
-
-agent.remember(content, importance=0.8)  # Store
-agent.recall(query)                      # Search
-```
-
-### Sessions
-```python
-manager = SessionManager()
-session = manager.create_session(agent)
-await session.send("message")            # Stateful messaging
-session.get_history(limit=10)            # Conversation history
-session.clear_history()                  # Reset conversation
-```
-
-### Evaluation
-```python
-from agentu import evaluate
-
-cases = [{"ask": "query", "expect": "result"}]
-results = await evaluate(agent, cases)
-print(results.accuracy)                  # 95.0
-print(results.to_json())                 # Export JSON
-```
-
-### Workflows
-```python
-agent("task")                            # Create step
-step1 >> step2                           # Sequential
-step1 & step2                            # Parallel
-await workflow.run()                     # Execute
-```
-
-### serve()
-```python
 serve(agent, port=8000, enable_cors=True)
 ```
 
-**Endpoints:** `/execute`, `/process`, `/tools`, `/memory/remember`, `/memory/recall`, `/docs`
+Endpoints: `/execute`, `/process`, `/tools`, `/memory/remember`, `/memory/recall`, `/docs`
+
+## API reference
+
+```python
+# Agent
+agent = Agent(name)                       # auto-detect model
+agent = Agent(name, model="qwen3")        # explicit model
+agent = Agent(name, max_turns=5)          # limit multi-turn cycles
+agent.with_tools([func1, func2])          # active tools
+agent.with_tools(defer=[many_funcs])      # searchable tools
+agent.with_cache(preset="smart")          # caching
+agent.with_skills(["github/repo/skill"])  # skills
+await agent.with_mcp([url])              # MCP servers
+
+await agent.call("tool", params)          # direct tool execution
+await agent.infer("natural language")     # LLM-routed execution
+
+agent.remember(content, importance=0.8)   # store memory
+agent.recall(query)                       # search memory
+
+# Sessions
+manager = SessionManager()
+session = manager.create_session(agent)
+await session.send("message")
+session.get_history(limit=10)
+session.clear_history()
+
+# Evaluation
+results = await evaluate(agent, test_cases)
+results.accuracy     # 95.0
+results.to_json()    # export
+
+# Workflows
+step1 >> step2          # sequential
+step1 & step2           # parallel
+await workflow.run()    # execute
+```
 
 ## Examples
 
 ```bash
-git clone https://github.com/hemanth/agentu
-cd agentu
+git clone https://github.com/hemanth/agentu && cd agentu
 
-python examples/basic.py       # Simple agent
-python examples/workflow.py    # Workflows
-python examples/memory.py      # Memory system
-python examples/example_sessions.py     # Stateful sessions
-python examples/example_eval.py         # Agent evaluation
-python examples/example_observe.py      # Observability
-python examples/api.py         # REST API
+python examples/basic.py                # simple agent
+python examples/workflow.py             # workflows
+python examples/memory.py               # memory system
+python examples/example_sessions.py     # stateful sessions
+python examples/example_eval.py         # agent evaluation
+python examples/example_observe.py      # observability
+python examples/api.py                  # REST API
 ```
 
 ## Testing
