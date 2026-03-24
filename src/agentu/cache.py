@@ -13,10 +13,13 @@ import json
 import time
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# A prompt can be a plain string or a conversation (list of message dicts)
+Prompt = Union[str, List[Dict[str, str]]]
 
 
 @dataclass
@@ -102,30 +105,37 @@ class LLMCache:
         conn.commit()
         conn.close()
     
-    def _make_key(self, prompt: str, model: str, **kwargs) -> str:
-        """Create a cache key from prompt and model."""
+    @staticmethod
+    def _normalize_prompt(prompt: Prompt) -> str:
+        """Normalize a prompt to a deterministic string for hashing."""
+        if isinstance(prompt, list):
+            return json.dumps(prompt, sort_keys=True, ensure_ascii=False)
+        return prompt
+
+    def _make_key(self, prompt: Prompt, namespace: str, **kwargs) -> str:
+        """Create a cache key from prompt and namespace."""
         # Include relevant kwargs in the key (temperature, etc.)
         key_data = {
-            "prompt": prompt,
-            "model": model,
+            "prompt": self._normalize_prompt(prompt),
+            "model": namespace,
             "temperature": kwargs.get("temperature"),
         }
         key_str = json.dumps(key_data, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()
     
-    def get(self, prompt: str, model: str, **kwargs) -> Optional[str]:
+    def get(self, prompt: Prompt, namespace: str, **kwargs) -> Optional[str]:
         """
         Get cached response if available and not expired.
         
         Args:
             prompt: The prompt that was sent
-            model: The model name
+            namespace: A unique identifier (e.g. model name) to scope the cache key
             **kwargs: Additional parameters that affect the response
             
         Returns:
             Cached response or None if not found/expired
         """
-        cache_key = self._make_key(prompt, model, **kwargs)
+        cache_key = self._make_key(prompt, namespace, **kwargs)
         now = time.time()
         
         conn = sqlite3.connect(self.db_path)
@@ -150,8 +160,8 @@ class LLMCache:
     
     def set(
         self,
-        prompt: str,
-        model: str,
+        prompt: Prompt,
+        namespace: str,
         response: str,
         metadata: Optional[Dict] = None,
         **kwargs
@@ -161,13 +171,13 @@ class LLMCache:
         
         Args:
             prompt: The prompt that was sent
-            model: The model name
+            namespace: A unique identifier (e.g. model name) to scope the cache key
             response: The response to cache
             metadata: Optional metadata to store
             **kwargs: Additional parameters that affect caching
         """
-        cache_key = self._make_key(prompt, model, **kwargs)
-        prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+        cache_key = self._make_key(prompt, namespace, **kwargs)
+        prompt_hash = hashlib.sha256(self._normalize_prompt(prompt).encode()).hexdigest()
         now = time.time()
         expires_at = now + self.ttl
         
@@ -181,7 +191,7 @@ class LLMCache:
         """, (
             cache_key,
             prompt_hash,
-            model,
+            namespace,
             response,
             now,
             expires_at,
@@ -244,9 +254,9 @@ class LLMCache:
         stats["active_entries"] = active_entries
         return stats
     
-    def invalidate(self, prompt: str, model: str, **kwargs):
+    def invalidate(self, prompt: Prompt, namespace: str, **kwargs):
         """Invalidate a specific cache entry."""
-        cache_key = self._make_key(prompt, model, **kwargs)
+        cache_key = self._make_key(prompt, namespace, **kwargs)
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()

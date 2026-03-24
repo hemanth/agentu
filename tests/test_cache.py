@@ -150,3 +150,48 @@ class TestLLMCacheDefaults:
         assert Path(cache.db_path) == expected_path
         # Cleanup
         cache.clear()
+
+
+class TestLLMCacheConversation:
+    """Test caching with conversation (List[Dict]) prompts."""
+
+    @pytest.fixture
+    def cache(self, tmp_path):
+        db_path = str(tmp_path / "conv_cache.db")
+        return LLMCache(db_path=db_path, ttl=3600)
+
+    def test_conversation_set_and_get(self, cache):
+        """Cache and retrieve a conversation list."""
+        conversation = [
+            {"role": "assistant", "content": "Hello, how are you doing?"},
+            {"role": "user", "content": "Hello! I am Hemanth."},
+            {"role": "user", "content": "Can I get some vegan food here?"},
+        ]
+        cache.set(conversation, "gpt-4", "Sure, here are some options...")
+        result = cache.get(conversation, "gpt-4")
+        assert result == "Sure, here are some options..."
+
+
+    def test_conversation_order_matters(self, cache):
+        """Same messages in different order should produce different keys."""
+        conv_a = [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        ]
+        conv_b = [
+            {"role": "user", "content": "second"},
+            {"role": "user", "content": "first"},
+        ]
+        cache.set(conv_a, "model", "response-a")
+        cache.set(conv_b, "model", "response-b")
+
+        assert cache.get(conv_a, "model") == "response-a"
+        assert cache.get(conv_b, "model") == "response-b"
+
+    def test_conversation_invalidate(self, cache):
+        """Invalidate works with conversation prompts."""
+        conversation = [{"role": "user", "content": "test"}]
+        cache.set(conversation, "model", "cached")
+        cache.invalidate(conversation, "model")
+        assert cache.get(conversation, "model") is None
+

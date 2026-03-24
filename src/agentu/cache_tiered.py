@@ -3,12 +3,15 @@
 import hashlib
 import json
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 
 from .cache_storage_backends import CacheStorageBackend
 from .cache_semantic import SemanticIndex
 
 logger = logging.getLogger(__name__)
+
+# A prompt can be a plain string or a conversation (list of message dicts)
+Prompt = Union[str, List[Dict[str, str]]]
 
 
 class TieredCache:
@@ -29,12 +32,19 @@ class TieredCache:
         self._tier_hits: Dict[str, int] = {}
         self._dirty = False
 
-    def _make_key(self, prompt: str, model: str, **kwargs) -> str:
-        key_data = {"prompt": prompt, "model": model, "temperature": kwargs.get("temperature")}
+    @staticmethod
+    def _normalize_prompt(prompt: Prompt) -> str:
+        """Normalize a prompt to a deterministic string for hashing."""
+        if isinstance(prompt, list):
+            return json.dumps(prompt, sort_keys=True, ensure_ascii=False)
+        return prompt
+
+    def _make_key(self, prompt: Prompt, namespace: str, **kwargs) -> str:
+        key_data = {"prompt": self._normalize_prompt(prompt), "model": namespace, "temperature": kwargs.get("temperature")}
         return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
-    async def get(self, prompt: str, model: str, **kwargs) -> Optional[str]:
-        cache_key = self._make_key(prompt, model, **kwargs)
+    async def get(self, prompt: Prompt, namespace: str, **kwargs) -> Optional[str]:
+        cache_key = self._make_key(prompt, namespace, **kwargs)
 
         # Try exact match across tiers
         for i, backend in enumerate(self.backends):
@@ -62,9 +72,10 @@ class TieredCache:
         self._misses += 1
         return None
 
-    async def set(self, prompt: str, model: str, response: str, **kwargs) -> None:
-        cache_key = self._make_key(prompt, model, **kwargs)
-        value = {"response": response, "model": model, "prompt_hash": hashlib.sha256(prompt.encode()).hexdigest()}
+    async def set(self, prompt: Prompt, namespace: str, response: str, **kwargs) -> None:
+        cache_key = self._make_key(prompt, namespace, **kwargs)
+        normalized = self._normalize_prompt(prompt)
+        value = {"response": response, "model": namespace, "prompt_hash": hashlib.sha256(normalized.encode()).hexdigest()}
 
         for backend in self.backends:
             await backend.set(cache_key, value, ttl=self.ttl)
@@ -92,8 +103,8 @@ class TieredCache:
         self._tier_hits.clear()
         self._dirty = False
 
-    async def invalidate(self, prompt: str, model: str, **kwargs) -> None:
-        cache_key = self._make_key(prompt, model, **kwargs)
+    async def invalidate(self, prompt: Prompt, namespace: str, **kwargs) -> None:
+        cache_key = self._make_key(prompt, namespace, **kwargs)
         for backend in self.backends:
             await backend.delete(cache_key)
         if self.semantic_index:

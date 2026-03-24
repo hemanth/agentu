@@ -102,3 +102,31 @@ class TestTieredCacheWithSemantic:
         # Same text will match semantically (score=1.0)
         result = await cache.get("hello world", "model")
         assert result == "cached response"
+
+
+class TestTieredCacheConversation:
+    """Test tiered cache with conversation (List[Dict]) prompts."""
+
+    @pytest_asyncio.fixture
+    async def cache(self, tmp_path):
+        backends = [MemoryBackend(max_size=100), SQLiteBackend(db_path=str(tmp_path / "conv.db"))]
+        return TieredCache(backends=backends, ttl=3600)
+
+    @pytest.mark.asyncio
+    async def test_conversation_set_and_get(self, cache):
+        conversation = [
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "I am Hemanth. I authored agentu"},
+            {"role": "user", "content": "Can I get some vegan food here?"},
+        ]
+        await cache.set(conversation, "gpt-4", "Sure, here are options...")
+        result = await cache.get(conversation, "gpt-4")
+        assert result == "Sure, here are options..."
+
+    @pytest.mark.asyncio
+    async def test_conversation_invalidate(self, cache):
+        conversation = [{"role": "user", "content": "test"}]
+        await cache.set(conversation, "model", "cached")
+        await cache.invalidate(conversation, "model")
+        assert await cache.get(conversation, "model") is None
+
