@@ -13,6 +13,8 @@ from .memory import Memory
 from .workflow import Step
 from .skill import Skill, load_skill
 from .observe import Observer, EventType, get_config
+from .guardrails import Guardrail, GuardrailSet, GuardrailError
+from .middleware import BaseMiddleware, MiddlewareChain, CallContext
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -153,6 +155,11 @@ class Agent:
         else:
             self.cache = None
         self._cache_sync = None
+
+        # Guardrails and middleware
+        self._input_guardrails: Optional[GuardrailSet] = None
+        self._output_guardrails: Optional[GuardrailSet] = None
+        self._middleware_chain: Optional[MiddlewareChain] = None
 
         # Reusable aiohttp session for LLM calls
         self._llm_session: Optional[aiohttp.ClientSession] = None
@@ -327,6 +334,59 @@ class Agent:
                     sync_interval=sync_interval,
                 )
 
+        return self
+
+    def with_guardrails(
+        self,
+        input_guardrails: Optional[List[Guardrail]] = None,
+        output_guardrails: Optional[List[Guardrail]] = None,
+    ) -> 'Agent':
+        """Add guardrails for input/output validation.
+
+        Args:
+            input_guardrails: Guardrails to check user input before LLM call
+            output_guardrails: Guardrails to check LLM output before returning
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> from agentu.guardrails import PII, ContentFilter, MaxLength
+            >>> agent = Agent("bot").with_guardrails(
+            ...     input_guardrails=[PII(), MaxLength(max_chars=5000)],
+            ...     output_guardrails=[ContentFilter(block=["violence"])]
+            ... )
+        """
+        if input_guardrails:
+            self._input_guardrails = GuardrailSet(input_guardrails)
+        if output_guardrails:
+            self._output_guardrails = GuardrailSet(output_guardrails)
+        return self
+
+    def use(self, *middlewares: BaseMiddleware) -> 'Agent':
+        """Add middleware to the processing pipeline.
+
+        Middleware runs in order for `before` hooks and reverse order
+        for `after` hooks (like Express.js).
+
+        Args:
+            *middlewares: Middleware instances to add
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> from agentu.middleware import CostTracker, LoggerMiddleware, RetryMiddleware
+            >>> agent = Agent("bot").use(
+            ...     CostTracker(),
+            ...     LoggerMiddleware(),
+            ...     RetryMiddleware(max_retries=3)
+            ... )
+        """
+        if self._middleware_chain is None:
+            self._middleware_chain = MiddlewareChain()
+        for mw in middlewares:
+            self._middleware_chain.add(mw)
         return self
 
     def _build_semantic_index(self, provider_type: str, model: Optional[str],
@@ -657,15 +717,8 @@ class Agent:
             self._llm_session = aiohttp.ClientSession()
         return self._llm_session
 
-    async def _call_llm(self, prompt: str) -> str:
-        """Make an async API call to OpenAI-compatible endpoint."""
-        # Check cache first if enabled
-        if self.cache_enabled and self.cache:
-            cached = await self.cache.get(prompt, self.model, temperature=self.temperature)
-            if cached is not None:
-                logger.debug(f"Cache hit for prompt (len={len(prompt)})")
-                return cached
-        
+    async def _raw_llm_call(self, prompt: str) -> str:
+        """Make the raw HTTP call to the LLM API (no middleware/guardrails)."""
         with self.observer.trace(
             EventType.LLM_REQUEST,
             {"model": self.model, "prompt_length": len(prompt)}
@@ -700,15 +753,45 @@ class Agent:
                         logger.error("Empty response from API")
                         raise Exception("Empty response from API")
 
-                    # Store in cache if enabled
-                    if self.cache_enabled and self.cache:
-                        await self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
-
                     return full_response
 
             except aiohttp.ClientError as e:
                 logger.error(f"Error calling LLM API: {str(e)}")
                 raise
+
+    async def _call_llm(self, prompt: str) -> str:
+        """Make an LLM call with guardrails and middleware."""
+        # Check input guardrails
+        if self._input_guardrails:
+            self._input_guardrails.check_or_raise(prompt, direction="input")
+
+        # Check cache first if enabled
+        if self.cache_enabled and self.cache:
+            cached = await self.cache.get(prompt, self.model, temperature=self.temperature)
+            if cached is not None:
+                logger.debug(f"Cache hit for prompt (len={len(prompt)})")
+                return cached
+
+        # Run through middleware pipeline if present
+        if self._middleware_chain:
+            context = CallContext(
+                prompt=prompt,
+                namespace=self.model,
+                temperature=self.temperature,
+            )
+            full_response = await self._middleware_chain.execute(context, self._raw_llm_call)
+        else:
+            full_response = await self._raw_llm_call(prompt)
+
+        # Check output guardrails
+        if self._output_guardrails:
+            self._output_guardrails.check_or_raise(full_response, direction="output")
+
+        # Store in cache if enabled
+        if self.cache_enabled and self.cache:
+            await self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
+
+        return full_response
 
     async def _stream_llm(self, prompt: str) -> AsyncIterator[str]:
         """Stream LLM response chunks via SSE.
@@ -762,6 +845,7 @@ class Agent:
 
         Unlike infer(), this streams the raw LLM response without tool execution.
         Useful for conversational responses where you want real-time output.
+        Respects input guardrails before streaming and output guardrails after.
 
         Args:
             user_input: Natural language query
@@ -773,7 +857,16 @@ class Agent:
             >>> async for chunk in agent.stream("Explain quantum computing"):
             ...     print(chunk, end="", flush=True)
         """
+        # Check input guardrails before streaming
+        if self._input_guardrails:
+            self._input_guardrails.check_or_raise(user_input, direction="input")
+
         self.observer.record(EventType.INFERENCE_START, {"query": user_input, "streaming": True})
+
+        # Run middleware before hook
+        if self._middleware_chain:
+            ctx = CallContext(prompt=user_input, namespace=self.model, temperature=self.temperature)
+            ctx = await self._middleware_chain.run_before(ctx)
 
         # Load deferred MCP tools on first use
         if self._pending_mcp_config:
@@ -806,6 +899,15 @@ class Agent:
                 metadata={'role': 'agent', 'streaming': True},
                 importance=0.6
             )
+
+        # Run middleware after hook
+        if self._middleware_chain:
+            ctx = CallContext(prompt=user_input, namespace=self.model, temperature=self.temperature)
+            collected = await self._middleware_chain.run_after(ctx, collected)
+
+        # Check output guardrails on the collected response
+        if self._output_guardrails:
+            self._output_guardrails.check_or_raise(collected, direction="output")
 
         # Cache the full response
         if self.cache_enabled and self.cache:

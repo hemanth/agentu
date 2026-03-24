@@ -2,8 +2,20 @@
 
 import pytest
 import asyncio
+import socket
 from agentu import Agent, Tool, observe
 from agentu.observe import Observer, EventType, OutputFormat, Event, Metrics
+
+
+def _ollama_up():
+    try:
+        socket.create_connection(("localhost", 11434), timeout=0.5).close()
+        return True
+    except OSError:
+        return False
+
+
+requires_ollama = pytest.mark.skipif(not _ollama_up(), reason="Ollama not running")
 
 
 @pytest.fixture
@@ -139,6 +151,7 @@ class TestObserver:
 
 class TestAgentInstrumentation:
     """Test agent instrumentation."""
+    pytestmark = requires_ollama
     
     @pytest.mark.asyncio
     async def test_tool_call_tracked(self, test_agent):

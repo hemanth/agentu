@@ -3,11 +3,23 @@
 import pytest
 import asyncio
 import time
+import socket
 from pathlib import Path
 import tempfile
 import shutil
 
 from agentu import Agent, Tool, Session, SessionManager
+
+
+def _ollama_up():
+    try:
+        socket.create_connection(("localhost", 11434), timeout=0.5).close()
+        return True
+    except OSError:
+        return False
+
+
+requires_ollama = pytest.mark.skipif(not _ollama_up(), reason="Ollama not running")
 
 
 @pytest.fixture
@@ -56,6 +68,7 @@ class TestSession:
         assert session.agent == test_agent
         assert session.agent.memory_enabled
     
+    @requires_ollama
     @pytest.mark.asyncio
     async def test_session_send_increments_turn(self, test_agent):
         """Test that sending messages increments turn counter."""
@@ -66,6 +79,7 @@ class TestSession:
         
         assert session.turn_count == initial_turn + 1
     
+    @requires_ollama
     @pytest.mark.asyncio
     async def test_session_send_returns_response(self, test_agent):
         """Test that send returns a response with session info."""
@@ -281,6 +295,7 @@ class TestSessionManager:
 
 class TestSessionIntegration:
     """Integration tests for sessions with agent inference."""
+    pytestmark = requires_ollama
     
     @pytest.mark.asyncio
     async def test_session_maintains_context(self, test_agent):

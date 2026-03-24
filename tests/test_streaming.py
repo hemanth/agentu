@@ -77,6 +77,9 @@ def agent():
         a.cache = None
         a._llm_session = None
         a._pending_mcp_config = None
+        a._input_guardrails = None
+        a._output_guardrails = None
+        a._middleware_chain = None
         return a
 
 

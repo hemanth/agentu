@@ -20,9 +20,19 @@ from .cache_semantic import SemanticIndex
 from .cache_tiered import TieredCache
 from .cache_sync import CacheSync
 from .workflow import Step, SequentialStep, ParallelStep, WorkflowCheckpoint, resume_workflow
-from . import observe
+from . import guardrails, middleware, observe
 
-__version__ = "1.11.0"
+# Backward-compat re-exports (individual class imports still work)
+from .guardrails import (
+    Guardrail, GuardrailResult, GuardrailSet, GuardrailError,
+    PII, ContentFilter, MaxLength, JSONSchema,
+)
+from .middleware import (
+    Middleware, BaseMiddleware, MiddlewareChain, CallContext,
+    CostTracker, LoggerMiddleware, RetryMiddleware,
+)
+
+__version__ = "1.13.0"
 __all__ = [
     "Agent",
     "Tool",
@@ -77,4 +87,23 @@ __all__ = [
     "WorkflowCheckpoint",
     "resume_workflow",
     "observe",
+    "guardrails",
+    "middleware",
+    # Guardrails
+    "Guardrail",
+    "GuardrailResult",
+    "GuardrailSet",
+    "GuardrailError",
+    "PII",
+    "ContentFilter",
+    "MaxLength",
+    "JSONSchema",
+    # Middleware
+    "Middleware",
+    "BaseMiddleware",
+    "MiddlewareChain",
+    "CallContext",
+    "CostTracker",
+    "LoggerMiddleware",
+    "RetryMiddleware",
 ]

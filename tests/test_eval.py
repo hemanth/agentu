@@ -2,7 +2,19 @@
 
 import pytest
 import asyncio
+import socket
 from agentu import Agent, Tool, evaluate, EvalResult, FailedCase
+
+
+def _ollama_up():
+    try:
+        socket.create_connection(("localhost", 11434), timeout=0.5).close()
+        return True
+    except OSError:
+        return False
+
+
+requires_ollama = pytest.mark.skipif(not _ollama_up(), reason="Ollama not running")
 
 
 @pytest.fixture
@@ -35,6 +47,7 @@ def test_agent():
 
 class TestEvaluate:
     """Test evaluate() function."""
+    pytestmark = requires_ollama
     
     @pytest.mark.asyncio
     async def test_exact_match(self, test_agent):
