@@ -1,11 +1,16 @@
-"""Serve agents as REST API services using FastAPI."""
+"""Serve agents as REST API services using FastAPI with HTTP, WebSocket, and SSE."""
 
 import asyncio
+import json
+import logging
 from typing import Dict, Any, Optional, List, Union
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
+
+from .session import SessionManager
 
 from .._core.agent import Agent
 
@@ -19,6 +24,7 @@ class ExecuteRequest(BaseModel):
 class ProcessRequest(BaseModel):
     """Request model for natural language processing."""
     input: str
+    session_id: Optional[str] = None
 
 
 class ToolInfo(BaseModel):
@@ -28,8 +34,11 @@ class ToolInfo(BaseModel):
     parameters: Dict[str, Any]
 
 
+logger = logging.getLogger(__name__)
+
+
 class AgentServer:
-    """Server wrapper for Agent."""
+    """Server wrapper for Agent with HTTP, WebSocket, and SSE transports."""
 
     def __init__(
         self,
@@ -55,6 +64,7 @@ class AgentServer:
             cors_credentials: Allow credentials (default: False)
         """
         self.agent = agent
+        self.session_manager = SessionManager()
         self.app = FastAPI(title=title, version=version)
 
         # Setup CORS if enabled
@@ -68,6 +78,8 @@ class AgentServer:
             )
 
         self._setup_routes()
+        self._setup_ws()
+        self._setup_sse()
 
     def _setup_routes(self):
         """Setup FastAPI routes."""
@@ -282,7 +294,16 @@ class AgentServer:
             result = runner.run(name, timeout=30)
             
             return result
-        
+
+        @self.app.get("/transports", tags=["info"])
+        async def transports():
+            """List available transport methods."""
+            return {
+                "http": {"/process": "POST", "/execute": "POST"},
+                "websocket": {"/ws": "Bidirectional streaming with sessions"},
+                "sse": {"/stream": "POST → text/event-stream"},
+            }
+
         @self.app.get("/api/examples/{name}/steps", tags=["playground"])
         async def get_example_steps(name: str):
             """Get step-by-step guide for example."""
@@ -298,6 +319,119 @@ class AgentServer:
             steps = runner.get_steps(example.code)
             
             return {"steps": steps}
+
+    def _setup_ws(self):
+        """Setup WebSocket transport at /ws."""
+
+        @self.app.websocket("/ws")
+        async def websocket_endpoint(websocket: WebSocket):
+            """Bidirectional streaming with per-connection sessions.
+
+            Send JSON: {"input": "...", "session_id": "..."}
+            Receive JSON chunks: {"type": "chunk", "content": "..."}
+            Final message: {"type": "done", "session_info": {...}}
+            """
+            await websocket.accept()
+            session = None
+            logger.info("WebSocket connection opened")
+
+            try:
+                while True:
+                    data = await websocket.receive_json()
+                    user_input = data.get("input", "")
+                    session_id = data.get("session_id")
+
+                    if not user_input:
+                        await websocket.send_json(
+                            {"type": "error", "message": "Missing 'input' field"}
+                        )
+                        continue
+
+                    # Create or reuse session
+                    if session_id:
+                        session = self.session_manager.get_session(session_id)
+                    if session is None:
+                        session = self.session_manager.create_session(
+                            self.agent, session_id=session_id
+                        )
+
+                    # Stream chunks
+                    async for chunk in session.agent.stream(user_input):
+                        await websocket.send_json(
+                            {"type": "chunk", "content": chunk}
+                        )
+
+                    session.turn_count += 1
+                    session.last_accessed = __import__("time").time()
+
+                    await websocket.send_json(
+                        {
+                            "type": "done",
+                            "session_info": session.to_dict(),
+                        }
+                    )
+
+            except WebSocketDisconnect:
+                logger.info(
+                    f"WebSocket disconnected (session={session.session_id if session else 'none'})"
+                )
+                if session:
+                    session.save()
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+                try:
+                    await websocket.send_json(
+                        {"type": "error", "message": str(e)}
+                    )
+                except Exception:
+                    pass
+
+    def _setup_sse(self):
+        """Setup SSE transport at /stream."""
+
+        @self.app.post("/stream", tags=["streaming"])
+        async def stream_sse(request: ProcessRequest):
+            """Stream agent response as Server-Sent Events.
+
+            POST with {"input": "...", "session_id": "..."}
+            Returns text/event-stream with chunked JSON events.
+
+            Events:
+                data: {"type": "chunk", "content": "..."}
+                data: {"type": "done", "session_info": {...}}
+            """
+            session = None
+            if request.session_id:
+                session = self.session_manager.get_session(request.session_id)
+            if session is None and request.session_id:
+                session = self.session_manager.create_session(
+                    self.agent, session_id=request.session_id
+                )
+
+            agent = session.agent if session else self.agent
+
+            async def event_generator():
+                async for chunk in agent.stream(request.input):
+                    payload = json.dumps({"type": "chunk", "content": chunk})
+                    yield f"data: {payload}\n\n"
+
+                done_payload = {"type": "done"}
+                if session:
+                    session.turn_count += 1
+                    session.last_accessed = __import__("time").time()
+                    done_payload["session_info"] = session.to_dict()
+
+                yield f"data: {json.dumps(done_payload)}\n\n"
+
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs):
         """Run the server.
@@ -323,7 +457,12 @@ def serve(
     cors_credentials: bool = False,
     **kwargs
 ):
-    """Serve an agent as a REST API service.
+    """Serve an agent with HTTP, WebSocket, and SSE transports.
+
+    Transports:
+        HTTP:  POST /process, POST /execute  (request-response)
+        WSS:   WS   /ws                      (bidirectional streaming)
+        SSE:   POST /stream                   (server-sent events)
 
     Args:
         agent: Agent instance to serve
@@ -339,22 +478,22 @@ def serve(
         **kwargs: Additional uvicorn.run arguments
 
     Examples:
-        Basic usage:
+        Basic usage (all transports available):
         >>> from agentu import Agent, serve
         >>> agent = Agent("assistant", model="llama3")
         >>> serve(agent, port=8000)
 
-        With CORS enabled:
-        >>> serve(agent, port=8000, enable_cors=True)
+        WebSocket client:
+        >>> import websockets
+        >>> async with websockets.connect("ws://localhost:8000/ws") as ws:
+        ...     await ws.send('{"input": "hello"}')
+        ...     async for msg in ws:
+        ...         print(msg)  # {"type": "chunk", ...} then {"type": "done"}
 
-        With specific CORS origins:
-        >>> serve(
-        ...     agent,
-        ...     port=8000,
-        ...     enable_cors=True,
-        ...     cors_origins=["http://localhost:3000", "https://app.example.com"],
-        ...     cors_credentials=True
-        ... )
+        SSE client (curl):
+        >>> # curl -N -X POST localhost:8000/stream \\
+        >>> #   -H 'Content-Type: application/json' \\
+        >>> #   -d '{"input": "hello"}'
     """
     server = AgentServer(
         agent,
