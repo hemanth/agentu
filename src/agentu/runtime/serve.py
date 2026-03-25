@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-from .agent import Agent
+from .._core.agent import Agent
 
 
 class ExecuteRequest(BaseModel):

@@ -3,8 +3,8 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from duckduckgo_search import DDGS
 
-from .agent import Agent
-from .tools import Tool
+from .._core.agent import Agent
+from .._core.tools import Tool
 
 async def search_duckduckgo(
     query: str,

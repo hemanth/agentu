@@ -4,8 +4,8 @@ import pytest
 import pytest_asyncio
 import asyncio
 
-from agentu.cache_sync import CacheSync
-from agentu.cache_storage_backends import SQLiteBackend
+from agentu.cache.sync import CacheSync
+from agentu.cache.storage import SQLiteBackend
 
 
 class TestCacheSync:

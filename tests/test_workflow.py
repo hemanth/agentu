@@ -4,7 +4,7 @@ import pytest
 import asyncio
 from unittest.mock import AsyncMock, Mock
 from agentu import Agent
-from agentu.workflow import Step, SequentialStep, ParallelStep
+from agentu.workflow.workflow import Step, SequentialStep, ParallelStep
 
 
 @pytest.fixture

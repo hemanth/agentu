@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from agentu.ralph import RalphRunner, RalphConfig, RalphState, ralph
+from agentu.workflow.ralph import RalphRunner, RalphConfig, RalphState, ralph
 
 
 class TestRalphState:

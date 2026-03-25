@@ -7,7 +7,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
 
-from .memory_storage import create_storage, MemoryStorage
+from .storage import create_storage, MemoryStorage
 
 logger = logging.getLogger(__name__)
 

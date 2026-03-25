@@ -3,8 +3,8 @@
 import pytest
 import pytest_asyncio
 
-from agentu.cache_semantic import SemanticIndex
-from agentu.cache_embeddings import FakeEmbedding
+from agentu.cache.semantic import SemanticIndex
+from agentu.cache.embeddings import FakeEmbedding
 
 
 class TestSemanticIndex:

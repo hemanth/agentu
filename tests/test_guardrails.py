@@ -1,5 +1,5 @@
 import pytest
-from agentu.guardrails import (
+from agentu.middleware.guardrails import (
     Guardrail, GuardrailResult, GuardrailSet, GuardrailError,
     PII, ContentFilter, MaxLength, JSONSchema,
 )

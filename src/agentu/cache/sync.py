@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from .cache_storage_backends import SQLiteBackend
+from .storage import SQLiteBackend
 
 logger = logging.getLogger(__name__)
 

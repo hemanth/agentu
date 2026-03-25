@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Callable, Union
 from dataclasses import dataclass, field
 import logging
 
-from .agent import Agent
+from .._core.agent import Agent
 
 logger = logging.getLogger(__name__)
 

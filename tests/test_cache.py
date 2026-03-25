@@ -5,7 +5,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from agentu.cache import LLMCache, CacheStats
+from agentu.cache.cache import LLMCache, CacheStats
 
 
 class TestCacheStats:

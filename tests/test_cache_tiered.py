@@ -3,10 +3,10 @@
 import pytest
 import pytest_asyncio
 
-from agentu.cache_tiered import TieredCache
-from agentu.cache_storage_backends import MemoryBackend, SQLiteBackend
-from agentu.cache_embeddings import FakeEmbedding
-from agentu.cache_semantic import SemanticIndex
+from agentu.cache.tiered import TieredCache
+from agentu.cache.storage import MemoryBackend, SQLiteBackend
+from agentu.cache.embeddings import FakeEmbedding
+from agentu.cache.semantic import SemanticIndex
 
 
 class TestTieredCacheExactMatch:

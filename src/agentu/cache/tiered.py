@@ -5,8 +5,8 @@ import json
 import logging
 from typing import Optional, Dict, Any, List, Union
 
-from .cache_storage_backends import CacheStorageBackend
-from .cache_semantic import SemanticIndex
+from .storage import CacheStorageBackend
+from .semantic import SemanticIndex
 
 logger = logging.getLogger(__name__)
 

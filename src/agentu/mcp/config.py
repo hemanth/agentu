@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 import logging
 
-from .mcp_transport import MCPServerConfig
+from .transport import MCPServerConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

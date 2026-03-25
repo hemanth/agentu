@@ -1,5 +1,5 @@
 import pytest
-from agentu.search import SearchAgent, search_duckduckgo
+from agentu.skills.search import SearchAgent, search_duckduckgo
 
 def test_search_agent_creation():
     agent = SearchAgent("test_search")

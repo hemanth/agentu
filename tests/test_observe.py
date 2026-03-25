@@ -4,7 +4,7 @@ import pytest
 import asyncio
 import socket
 from agentu import Agent, Tool, observe
-from agentu.observe import Observer, EventType, OutputFormat, Event, Metrics
+from agentu.middleware.observe import Observer, EventType, OutputFormat, Event, Metrics
 
 
 def _ollama_up():

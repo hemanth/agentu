@@ -11,7 +11,7 @@ from agentu import (
     MCPConfigLoader,
     Agent
 )
-from agentu.mcp_transport import MCPHTTPTransport
+from agentu.mcp.transport import MCPHTTPTransport
 
 
 class TestAuthConfig:
@@ -621,7 +621,7 @@ class TestEndToEndIntegration:
             assert result == "42"
             await agent.close_mcp_connections()
 
-    @patch('agentu.mcp_config.load_mcp_servers')
+    @patch('agentu.mcp.config.load_mcp_servers')
     def test_auto_load_from_config(self, mock_load_servers):
         """Test auto-loading tools from config file stores config for deferred loading."""
         mock_load_servers.return_value = {

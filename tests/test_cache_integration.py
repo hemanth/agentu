@@ -3,8 +3,8 @@
 import pytest
 from unittest.mock import patch
 
-from agentu.agent import Agent
-from agentu.cache_tiered import TieredCache
+from agentu._core.agent import Agent
+from agentu.cache.tiered import TieredCache
 
 
 class TestWithCacheMethod:

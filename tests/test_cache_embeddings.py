@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from agentu.cache_embeddings import (
+from agentu.cache.embeddings import (
     EmbeddingProvider, LocalEmbedding, APIEmbedding, FakeEmbedding, cosine_similarity
 )
 

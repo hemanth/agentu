@@ -3,8 +3,8 @@ import logging
 from typing import Dict, Any, List, Callable
 from dataclasses import dataclass
 
-from .tools import Tool
-from .mcp_transport import MCPTransport, MCPServerConfig, create_transport
+from .._core.tools import Tool
+from .transport import MCPTransport, MCPServerConfig, create_transport
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -4,8 +4,8 @@ import pytest
 import pytest_asyncio
 import asyncio
 
-from agentu.cache_storage_backends import CacheStorageBackend, MemoryBackend, SQLiteBackend
-from agentu.cache_storage_backends import RedisBackend, FilesystemBackend
+from agentu.cache.storage import CacheStorageBackend, MemoryBackend, SQLiteBackend
+from agentu.cache.storage import RedisBackend, FilesystemBackend
 
 
 class TestMemoryBackend:

@@ -2,7 +2,7 @@ import pytest
 import asyncio
 import logging
 from unittest.mock import AsyncMock, patch, MagicMock
-from agentu.middleware import (
+from agentu.middleware.middleware import (
     BaseMiddleware, MiddlewareChain, CallContext,
     CostTracker, LoggerMiddleware, RetryMiddleware,
 )
@@ -353,7 +353,7 @@ class TestAgentMiddlewareIntegration:
 
     def test_full_chaining(self):
         """Test that with_guardrails and use can be chained together."""
-        from agentu.guardrails import PII, MaxLength
+        from agentu.middleware.guardrails import PII, MaxLength
 
         agent = (
             Agent("test", model="test-model")

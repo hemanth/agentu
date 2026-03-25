@@ -6,7 +6,7 @@ import hashlib
 import logging
 from typing import Optional, Dict, Any
 
-from .cache_embeddings import EmbeddingProvider, cosine_similarity
+from .embeddings import EmbeddingProvider, cosine_similarity
 
 logger = logging.getLogger(__name__)
 

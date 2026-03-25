@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from agentu.workflow import (
+from agentu.workflow.workflow import (
     Step, SequentialStep, ParallelStep,
     WorkflowCheckpoint, _save_checkpoint, _load_checkpoint,
     resume_workflow

@@ -10,8 +10,8 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 import logging
 
-from .agent import Agent
-from .memory import Memory, MemoryEntry
+from .._core.agent import Agent
+from ..memory.memory import Memory, MemoryEntry
 
 logger = logging.getLogger(__name__)
 

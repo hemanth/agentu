@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from agentu.skill import (
+from agentu.skills.skill import (
     Skill,
     load_skill,
     _parse_github_url,

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from agentu import Agent, Tool
-from agentu.agent import get_ollama_models, get_default_model, _get_ollama_models_sync
+from agentu._core.agent import get_ollama_models, get_default_model, _get_ollama_models_sync
 
 @pytest.mark.asyncio
 async def test_get_ollama_models_success():
@@ -44,21 +44,21 @@ async def test_get_ollama_models_failure():
 
 def test_get_default_model_with_available_models():
     """Test get_default_model returns first available model."""
-    with patch('agentu.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
+    with patch('agentu._core.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
         model = get_default_model("http://localhost:11434")
         assert model == "qwen3:latest"
 
 
 def test_get_default_model_no_models():
     """Test get_default_model returns qwen3:latest fallback when no models available."""
-    with patch('agentu.agent._get_ollama_models_sync', return_value=[]):
+    with patch('agentu._core.agent._get_ollama_models_sync', return_value=[]):
         model = get_default_model("http://localhost:11434")
         assert model == "qwen3:latest"
 
 
 def test_agent_creation_auto_detect_model():
     """Test agent auto-detects model from Ollama."""
-    with patch('agentu.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
+    with patch('agentu._core.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
         agent = Agent("test_agent")
         assert agent.name == "test_agent"
         assert agent.model == "qwen3:latest"  # Should use first available model
@@ -67,7 +67,7 @@ def test_agent_creation_auto_detect_model():
 
 def test_agent_creation_explicit_model():
     """Test agent uses explicit model when provided."""
-    with patch('agentu.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
+    with patch('agentu._core.agent._get_ollama_models_sync', return_value=["qwen3:latest", "llama2:latest"]):
         agent = Agent("test_agent", model="mistral:latest")
         assert agent.name == "test_agent"
         assert agent.model == "mistral:latest"  # Should use explicit model, not auto-detected
@@ -76,7 +76,7 @@ def test_agent_creation_explicit_model():
 
 def test_agent_creation_fallback_model():
     """Test agent falls back to qwen3:latest when no Ollama models available."""
-    with patch('agentu.agent._get_ollama_models_sync', return_value=[]):
+    with patch('agentu._core.agent._get_ollama_models_sync', return_value=[]):
         agent = Agent("test_agent")
         assert agent.name == "test_agent"
         assert agent.model == "qwen3:latest"  # Should fall back to qwen3:latest

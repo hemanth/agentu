@@ -1,20 +1,23 @@
 import json
 import asyncio
 import aiohttp
-from typing import AsyncIterator, List, Dict, Any, Optional, Callable, Union
+from typing import AsyncIterator, List, Dict, Any, Optional, Callable, Type, Union
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import logging
 
+from .structured import build_response_format, parse_and_validate
+from .multimodal import build_content_parts
+
 from .tools import Tool
-from .mcp_config import load_mcp_servers
-from .mcp_tool import MCPToolManager
-from .memory import Memory
-from .workflow import Step
-from .skill import Skill, load_skill
-from .observe import Observer, EventType, get_config
-from .guardrails import Guardrail, GuardrailSet, GuardrailError
-from .middleware import BaseMiddleware, MiddlewareChain, CallContext
+from ..mcp.config import load_mcp_servers
+from ..mcp.tool import MCPToolManager
+from ..memory.memory import Memory
+from ..workflow.workflow import Step
+from ..skills.skill import Skill, load_skill
+from ..middleware.observe import Observer, EventType, get_config
+from ..middleware.guardrails import Guardrail, GuardrailSet, GuardrailError
+from ..middleware.middleware import BaseMiddleware, MiddlewareChain, CallContext
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -146,8 +149,8 @@ class Agent:
         # Initialize cache if enabled
         self.cache_enabled = cache
         if cache:
-            from .cache_tiered import TieredCache
-            from .cache_storage_backends import MemoryBackend, SQLiteBackend
+            from ..cache.tiered import TieredCache
+            from ..cache.storage import MemoryBackend, SQLiteBackend
             self.cache = TieredCache(
                 backends=[MemoryBackend(), SQLiteBackend()],
                 ttl=cache_ttl,
@@ -290,8 +293,8 @@ class Agent:
             - "offline": memory + sqlite + filesystem + semantic + background sync
             - "distributed": memory + redis + api semantic matching
         """
-        from .cache_storage_backends import MemoryBackend, SQLiteBackend, RedisBackend, FilesystemBackend
-        from .cache_tiered import TieredCache
+        from ..cache.storage import MemoryBackend, SQLiteBackend, RedisBackend, FilesystemBackend
+        from ..cache.tiered import TieredCache
 
         if preset is None:
             preset = "basic"
@@ -322,7 +325,7 @@ class Agent:
         self.cache_enabled = True
 
         if sync_enabled:
-            from .cache_sync import CacheSync
+            from ..cache.sync import CacheSync
             sqlite_backend = next((b for b in backends if isinstance(b, SQLiteBackend)), None)
             if sqlite_backend:
                 if sync_path is None:
@@ -391,8 +394,8 @@ class Agent:
 
     def _build_semantic_index(self, provider_type: str, model: Optional[str],
                               threshold: float):
-        from .cache_semantic import SemanticIndex
-        from .cache_embeddings import LocalEmbedding, APIEmbedding
+        from ..cache.semantic import SemanticIndex
+        from ..cache.embeddings import LocalEmbedding, APIEmbedding
 
         if provider_type == "local":
             provider = LocalEmbedding(model_name=model or "all-MiniLM-L6-v2")
@@ -427,8 +430,8 @@ class Agent:
             ...     {"url": "https://api.com/mcp", "headers": {"Auth": "Bearer xyz"}}
             ... ])
         """
-        from .mcp_config import load_mcp_servers
-        from .mcp_transport import MCPServerConfig
+        from ..mcp.config import load_mcp_servers
+        from ..mcp.transport import MCPServerConfig
 
         for server in servers:
             try:
@@ -444,7 +447,7 @@ class Agent:
 
                 # Handle URL string
                 elif isinstance(server, str):
-                    from .mcp_transport import TransportType
+                    from ..mcp.transport import TransportType
                     config = MCPServerConfig(
                         name=f"mcp_{len(self.mcp_manager.adapters)}",
                         transport_type=TransportType.HTTP,
@@ -458,7 +461,7 @@ class Agent:
 
                 # Handle dict with url and headers
                 elif isinstance(server, dict):
-                    from .mcp_transport import TransportType, AuthConfig
+                    from ..mcp.transport import TransportType, AuthConfig
                     url = server.get('url')
                     if not url:
                         raise ValueError("MCP server dict must contain 'url' key")
@@ -717,7 +720,12 @@ class Agent:
             self._llm_session = aiohttp.ClientSession()
         return self._llm_session
 
-    async def _raw_llm_call(self, prompt: str) -> str:
+    async def _raw_llm_call(
+        self,
+        prompt: str,
+        output_schema: Optional[Type] = None,
+        images: Optional[List[str]] = None,
+    ) -> str:
         """Make the raw HTTP call to the LLM API (no middleware/guardrails)."""
         with self.observer.trace(
             EventType.LLM_REQUEST,
@@ -728,15 +736,23 @@ class Agent:
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
 
+                # Build message content (plain text or multi-part with images)
+                content = build_content_parts(prompt, images)
+                body: Dict[str, Any] = {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": content}],
+                    "temperature": self.temperature,
+                    "stream": False,
+                }
+
+                # Add structured output response_format if schema provided
+                if output_schema is not None:
+                    body["response_format"] = build_response_format(output_schema)
+
                 session = await self._get_llm_session()
                 async with session.post(
                     f"{self.api_base}/chat/completions",
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": self.temperature,
-                        "stream": False
-                    },
+                    json=body,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
@@ -759,7 +775,12 @@ class Agent:
                 logger.error(f"Error calling LLM API: {str(e)}")
                 raise
 
-    async def _call_llm(self, prompt: str) -> str:
+    async def _call_llm(
+        self,
+        prompt: str,
+        output_schema: Optional[Type] = None,
+        images: Optional[List[str]] = None,
+    ) -> str:
         """Make an LLM call with guardrails and middleware."""
         # Check input guardrails
         if self._input_guardrails:
@@ -779,9 +800,12 @@ class Agent:
                 namespace=self.model,
                 temperature=self.temperature,
             )
-            full_response = await self._middleware_chain.execute(context, self._raw_llm_call)
+            # Middleware wraps _raw_llm_call; pass schema/images via closure
+            async def _call(p: str) -> str:
+                return await self._raw_llm_call(p, output_schema=output_schema, images=images)
+            full_response = await self._middleware_chain.execute(context, _call)
         else:
-            full_response = await self._raw_llm_call(prompt)
+            full_response = await self._raw_llm_call(prompt, output_schema=output_schema, images=images)
 
         # Check output guardrails
         if self._output_guardrails:
@@ -793,7 +817,11 @@ class Agent:
 
         return full_response
 
-    async def _stream_llm(self, prompt: str) -> AsyncIterator[str]:
+    async def _stream_llm(
+        self,
+        prompt: str,
+        images: Optional[List[str]] = None,
+    ) -> AsyncIterator[str]:
         """Stream LLM response chunks via SSE.
 
         Yields text chunks as they arrive from the OpenAI-compatible API.
@@ -807,12 +835,13 @@ class Agent:
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
 
+                content = build_content_parts(prompt, images)
                 session = await self._get_llm_session()
                 async with session.post(
                     f"{self.api_base}/chat/completions",
                     json={
                         "model": self.model,
-                        "messages": [{"role": "user", "content": prompt}],
+                        "messages": [{"role": "user", "content": content}],
                         "temperature": self.temperature,
                         "stream": True
                     },
@@ -830,9 +859,9 @@ class Agent:
                         try:
                             chunk = json.loads(data)
                             delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content")
-                            if content:
-                                yield content
+                            content_chunk = delta.get("content")
+                            if content_chunk:
+                                yield content_chunk
                         except json.JSONDecodeError:
                             continue
 
@@ -840,7 +869,11 @@ class Agent:
                 logger.error(f"Error streaming LLM API: {str(e)}")
                 raise
 
-    async def stream(self, user_input: str) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        user_input: str,
+        images: Optional[List[str]] = None,
+    ) -> AsyncIterator[str]:
         """Stream inference response as text chunks.
 
         Unlike infer(), this streams the raw LLM response without tool execution.
@@ -849,6 +882,7 @@ class Agent:
 
         Args:
             user_input: Natural language query
+            images: Optional list of image sources (URL, data URI, or local file path)
 
         Yields:
             Text chunks as they arrive from the LLM
@@ -878,7 +912,7 @@ class Agent:
         context = self._build_turn_context(user_input, [], active_skills)
 
         full_response = []
-        async for chunk in self._stream_llm(context):
+        async for chunk in self._stream_llm(context, images=images):
             full_response.append(chunk)
             yield chunk
 
@@ -1034,7 +1068,12 @@ Example response for calculator:
         
         return matched
 
-    async def infer(self, user_input: str) -> Dict[str, Any]:
+    async def infer(
+        self,
+        user_input: str,
+        output_schema: Optional[Type] = None,
+        images: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Infer tool and parameters from natural language input.
 
         Runs a multi-turn agentic loop:
@@ -1043,19 +1082,44 @@ Example response for calculator:
         3. If regular tool called, execute and check if more work needed
         4. If no tool selected (text response), return final result
 
+        When output_schema is set and no tools are registered, runs a
+        direct structured LLM call instead of the agentic tool loop.
+
         Args:
             user_input: Natural language query
+            output_schema: Optional Pydantic BaseModel class for structured output
+            images: Optional list of image sources (URL, data URI, or local file path)
 
         Returns:
-            Dict with tool_used, parameters, reasoning, and result
+            Dict with tool_used, parameters, reasoning, and result.
+            When output_schema is set, includes 'structured' key with validated instance.
         """
         # Track inference start
         self.observer.record(EventType.INFERENCE_START, {"query": user_input})
-        
+
         # Load deferred MCP tools on first inference
         if self._pending_mcp_config:
             await self.with_mcp([self._pending_mcp_config])
             self._pending_mcp_config = None
+
+        # Structured output fast path: direct LLM call with schema
+        if output_schema is not None and not self.tools:
+            raw = await self._call_llm(user_input, output_schema=output_schema, images=images)
+            validated = parse_and_validate(raw, output_schema)
+            result = {
+                "result": raw,
+                "structured": validated,
+            }
+            self.conversation_history.append({
+                "user_input": user_input,
+                "response": result,
+                "turns": 1,
+            })
+            self.observer.record(
+                EventType.INFERENCE_END,
+                {"query": user_input, "turns": 1, "structured": True}
+            )
+            return result
 
         # Store user input in memory
         if self.memory_enabled:
@@ -1219,7 +1283,7 @@ Example response for calculator:
         Example:
             >>> result = await agent.ralph("PROMPT.md", max_iterations=50)
         """
-        from .ralph import RalphRunner, RalphConfig
+        from ..workflow.ralph import RalphRunner, RalphConfig
         
         config = RalphConfig(
             prompt_file=prompt_file,

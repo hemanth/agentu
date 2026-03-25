@@ -3,8 +3,8 @@
 import os
 import tempfile
 import pytest
-from agentu.memory import MemoryEntry
-from agentu.memory_storage import JSONStorage, SQLiteStorage, create_storage
+from agentu.memory.memory import MemoryEntry
+from agentu.memory.storage import JSONStorage, SQLiteStorage, create_storage
 
 
 class TestJSONStorage:
