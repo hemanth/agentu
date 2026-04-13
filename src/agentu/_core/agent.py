@@ -18,6 +18,7 @@ from ..skills.skill import Skill, load_skill
 from ..middleware.observe import Observer, EventType, get_config
 from ..middleware.guardrails import Guardrail, GuardrailSet, GuardrailError
 from ..middleware.middleware import BaseMiddleware, MiddlewareChain, CallContext
+from ..middleware.notify import NotifyMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -391,6 +392,20 @@ class Agent:
         for mw in middlewares:
             self._middleware_chain.add(mw)
         return self
+
+    def with_notifier(self, targets: List[str], title: Optional[str] = None) -> 'Agent':
+        """Quickly add notification middleware to the agent.
+        
+        Requires the `[notify]` extra to be installed.
+        
+        Args:
+            targets: List of Apprise notification URLs
+            title: Optional title for the notification
+            
+        Returns:
+            Self for method chaining
+        """
+        return self.use(NotifyMiddleware(targets=targets, title=title))
 
     def _build_semantic_index(self, provider_type: str, model: Optional[str],
                               threshold: float):

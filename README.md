@@ -215,6 +215,45 @@ serve(agent, port=8000)
 # http://localhost:8000/docs — auto-generated API docs
 ```
 
+## Notifications
+
+Send low-latency, non-blocking alerts to Slack, Discord, Email, or SMS when an agent finishes its task.
+
+```bash
+pip install agentu[notify]
+```
+
+```python
+from agentu import Agent
+
+# Attach notification middleware via the builder pattern
+agent = Agent("my-bot").with_notifier([
+    "slack://bot-token/channel-id",
+    "discord://webhook_id/webhook_token"
+])
+
+# The agent executes without blocking, and posts a rich summary containing tokens and elapsed ms.
+await agent.infer("Audit the database schema")
+```
+
+### Custom Formatting & Failure Alerts
+Notifications trigger natively on Agent crashes too (e.g. rate limits). If you want to format exactly how the alert looks for successes or failures, provide a custom formatter:
+
+```python
+from agentu.middleware import NotifyMiddleware
+
+def custom_format(context, response, error) -> str:
+    if error:
+        return f"🚨 AGENT CRASH 🚨\n{error}"
+    return f"✅ Agent {context.namespace} finished in {context.elapsed_ms}ms"
+
+# Fall back to base use() method to pass the custom formatter
+agent.use(NotifyMiddleware(
+    targets=["slack://bot-token/channel-id"], 
+    formatter=custom_format
+))
+```
+
 ## Ralph mode
 
 Run agents in autonomous loops with progress tracking:
@@ -286,6 +325,7 @@ agent.with_tools([func1, func2])          # active tools
 agent.with_tools(defer=[many_funcs])      # searchable tools
 agent.with_cache(preset="smart")          # caching
 agent.with_skills(["github/repo/skill"])  # skills
+agent.with_notifier(["slack://bot-token"])       # notifications
 await agent.with_mcp([url])              # MCP servers
 
 await agent.call("tool", params)          # direct tool execution

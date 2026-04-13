@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentu"
-version = "1.14.0"
+version = "1.15.0"
 description = "A flexible Python package for creating AI agents with customizable tools"
 readme = "README.md"
 authors = [
@@ -42,6 +42,9 @@ semantic = [
 ]
 redis = [
     "redis>=4.0.0",
+]
+notify = [
+    "apprise>=1.0.0",
 ]
 cache-all = [
     "sentence-transformers>=2.2.0",

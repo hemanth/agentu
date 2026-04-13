@@ -41,6 +41,10 @@ class Middleware(Protocol):
         """Called after the LLM response. Return modified response."""
         ...
 
+    async def on_error(self, context: CallContext, error: Exception) -> None:
+        """Called when an LLM call fails completely (after all retries)."""
+        ...
+
 
 class BaseMiddleware:
     """Base class with default pass-through implementations."""
@@ -52,6 +56,9 @@ class BaseMiddleware:
 
     async def after(self, context: CallContext, response: str) -> str:
         return response
+
+    async def on_error(self, context: CallContext, error: Exception) -> None:
+        pass
 
 
 class CostTracker(BaseMiddleware):
@@ -215,6 +222,11 @@ class MiddlewareChain:
             response = await mw.after(context, response)
         return response
 
+    async def run_error(self, context: CallContext, error: Exception) -> None:
+        """Run all error hooks in reverse order."""
+        for mw in reversed(self.middlewares):
+            await mw.on_error(context, error)
+
     async def execute(self, context: CallContext, call_fn) -> str:
         """Execute the full pipeline: before → call → after.
 
@@ -249,4 +261,5 @@ class MiddlewareChain:
                     )
                     await asyncio.sleep(delay)
 
+        await self.run_error(context, last_error)
         raise last_error

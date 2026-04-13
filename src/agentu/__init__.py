@@ -34,6 +34,7 @@ from .middleware.middleware import (
     Middleware, BaseMiddleware, MiddlewareChain, CallContext,
     CostTracker, LoggerMiddleware, RetryMiddleware,
 )
+from .middleware.notify import NotifyMiddleware
 
 __version__ = "1.14.0"
 __all__ = [
@@ -108,6 +109,7 @@ __all__ = [
     "CostTracker",
     "LoggerMiddleware",
     "RetryMiddleware",
+    "NotifyMiddleware",
     # Structured Output
     "pydantic_to_json_schema",
     "build_response_format",
