@@ -27,35 +27,48 @@ result = await agent.infer("Find me laptops under $1500")
 
 ## Declarative Configuration
 
-You can also deploy agents natively from YAML or JSON configurations, mapping components like Models, System Prompts, Webhooks (via Apprise), Cache settings, and MCP tools with zero-code:
+`agentu` supports a robust, zero-code declarative mapping pattern via deeply typed Pydantic architectures. You can construct and provision agents natively via cleanly structured YAML or JSON payloads to orchestrate Models, System Prompts, Middleware webhooks, cache parameters, and MCP remote extensions.
 
-**1. Create a `bot.yaml` (or `.json`)**
+**1. Define your configuration array (`agent.yaml`)**
+
 ```yaml
+# agent.yaml
 name: "support-agent"
 model: "openai/gpt-4o"
-system_prompt: "You are an expert IT agent."
+system_prompt: |
+  You are an expert IT escalation agent. Your primary objective
+  is to elegantly route the user's infrastructure queries and 
+  provide concise system resolution.
+
 notify:
-  - "discord://webhook/id"
+  - "slack://your-bot-token"
+
 cache:
   preset: "distributed"
+  ttl: 7200
 ```
 
-**2. Load dynamically**
+**2. Dynamically instantiate and execute**
+
 ```python
-from agentu import Agent
 import asyncio
+from agentu import Agent
+from your_module import resolve_ticket
 
 async def main():
-    agent = await Agent.from_config("bot.yaml")
+    # .from_config strictly validates types and natively applies builder hooks
+    agent = await Agent.from_config("agent.yaml") 
     
-    # Append local Python rules/tools if desired, then infer!
+    # Append localized raw Python executables if necessary
     agent.with_tools([resolve_ticket])
-    await agent.infer("Help me reset my router")
+    
+    result = await agent.infer("Help me reset my localized gateway router")
+    print(result)
 
 asyncio.run(main())
 ```
 
-*(Requires `pip install agentu[yaml]` to load `.yaml` files. JSON loads natively without extra dependencies).*
+> **Note:** Loading `.yaml` files requires the strict dependencies bundle. Install via `pip install agentu[yaml]`. Standard JSON files bypass this routing overhead entirely.
 
 ## Workflows
 
