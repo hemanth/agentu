@@ -35,10 +35,12 @@ from .middleware.middleware import (
     CostTracker, LoggerMiddleware, RetryMiddleware,
 )
 from .middleware.notify import NotifyMiddleware
+from ._core.config import AgentConfig
 
-__version__ = "1.14.0"
+__version__ = "1.15.0"
 __all__ = [
     "Agent",
+    "AgentConfig",
     "Tool",
     "Skill",
     "load_skill",

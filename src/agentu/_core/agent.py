@@ -170,6 +170,41 @@ class Agent:
 
         # Store MCP config for deferred async loading
         self._pending_mcp_config = mcp_config_path if (load_mcp_tools and mcp_config_path) else None
+
+    @classmethod
+    async def from_config(cls, path: str) -> 'Agent':
+        """Load an agent declaratively from a JSON or YAML configuration file.
+        
+        Requires the `[yaml]` optional dependency if using .yaml files.
+        
+        Args:
+            path: String path resolving to the configuration file.
+            
+        Returns:
+            A fully constructed asynchronous Agent instance.
+        """
+        from .config import AgentConfig
+        
+        cfg = AgentConfig.load(path)
+        
+        agent = cls(name=cfg.name, model=cfg.model)
+        
+        if cfg.system_prompt:
+            agent.context = cfg.system_prompt
+        
+        if cfg.cache:
+            agent.with_cache(preset=cfg.cache.preset, ttl=cfg.cache.ttl)
+            
+        if cfg.notify:
+            agent.with_notifier(targets=cfg.notify)
+            
+        if cfg.skills:
+            agent.with_skills(cfg.skills)
+            
+        if cfg.mcp and cfg.mcp.urls:
+            await agent.with_mcp(cfg.mcp.urls)
+            
+        return agent
         
     def _add_tool_internal(self, tool: Union[Tool, Callable], deferred: bool = False) -> Tool:
         """Internal method to add a single tool.

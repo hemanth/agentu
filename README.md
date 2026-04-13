@@ -25,6 +25,38 @@ result = await agent.infer("Find me laptops under $1500")
 
 `call()` runs a tool. `infer()` lets the LLM pick the tool and fill in the parameters from natural language.
 
+## Declarative Configuration
+
+You can also deploy agents natively from YAML or JSON configurations, mapping components like Models, System Prompts, Webhooks (via Apprise), Cache settings, and MCP tools with zero-code:
+
+**1. Create a `bot.yaml` (or `.json`)**
+```yaml
+name: "support-agent"
+model: "openai/gpt-4o"
+system_prompt: "You are an expert IT agent."
+notify:
+  - "discord://webhook/id"
+cache:
+  preset: "distributed"
+```
+
+**2. Load dynamically**
+```python
+from agentu import Agent
+import asyncio
+
+async def main():
+    agent = await Agent.from_config("bot.yaml")
+    
+    # Append local Python rules/tools if desired, then infer!
+    agent.with_tools([resolve_ticket])
+    await agent.infer("Help me reset my router")
+
+asyncio.run(main())
+```
+
+*(Requires `pip install agentu[yaml]` to load `.yaml` files. JSON loads natively without extra dependencies).*
+
 ## Workflows
 
 Chain agents with `>>` (sequential) and `&` (parallel):
