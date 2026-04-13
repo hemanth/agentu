@@ -46,6 +46,9 @@ redis = [
 notify = [
     "apprise>=1.0.0",
 ]
+yaml = [
+    "PyYAML>=6.0",
+]
 cache-all = [
     "sentence-transformers>=2.2.0",
     "redis>=4.0.0",
