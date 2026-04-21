@@ -1,7 +1,7 @@
 """agentu - A flexible Python package for creating AI agents with customizable tools."""
 
 from ._core.agent import Agent
-from ._core.tools import Tool
+from ._core.tools import Tool, ToolPermission
 from .skills.skill import Skill, load_skill
 from .skills.search import SearchAgent, search_tool
 from .mcp.config import MCPConfigLoader, load_mcp_servers

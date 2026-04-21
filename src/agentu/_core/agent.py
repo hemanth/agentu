@@ -9,7 +9,7 @@ import logging
 from .structured import build_response_format, parse_and_validate
 from .multimodal import build_content_parts
 
-from .tools import Tool
+from .tools import Tool, ToolPermission
 from ..mcp.config import load_mcp_servers
 from ..mcp.tool import MCPToolManager
 from ..memory.memory import Memory
@@ -164,6 +164,8 @@ class Agent:
         self._input_guardrails: Optional[GuardrailSet] = None
         self._output_guardrails: Optional[GuardrailSet] = None
         self._middleware_chain: Optional[MiddlewareChain] = None
+        self._max_corrections: int = 0  # disabled until with_guardrails sets it
+        self._allow_dangerous: bool = False
 
         # Reusable aiohttp session for LLM calls
         self._llm_session: Optional[aiohttp.ClientSession] = None
@@ -191,6 +193,9 @@ class Agent:
         
         if cfg.system_prompt:
             agent.context = cfg.system_prompt
+        
+        if cfg.rules:
+            agent.with_rules(cfg.rules)
         
         if cfg.cache:
             agent.with_cache(preset=cfg.cache.preset, ttl=cfg.cache.ttl)
@@ -379,12 +384,18 @@ class Agent:
         self,
         input_guardrails: Optional[List[Guardrail]] = None,
         output_guardrails: Optional[List[Guardrail]] = None,
+        max_corrections: int = 2,
     ) -> 'Agent':
         """Add guardrails for input/output validation.
+
+        When output guardrails fail, the agent can self-correct by feeding
+        the violation back to the LLM and retrying (up to max_corrections times).
 
         Args:
             input_guardrails: Guardrails to check user input before LLM call
             output_guardrails: Guardrails to check LLM output before returning
+            max_corrections: Max self-correction attempts on output guardrail failure (default: 2).
+                             Set to 0 to disable self-correction (raise immediately).
 
         Returns:
             Self for method chaining
@@ -393,13 +404,66 @@ class Agent:
             >>> from agentu.guardrails import PII, ContentFilter, MaxLength
             >>> agent = Agent("bot").with_guardrails(
             ...     input_guardrails=[PII(), MaxLength(max_chars=5000)],
-            ...     output_guardrails=[ContentFilter(block=["violence"])]
+            ...     output_guardrails=[ContentFilter(block=["violence"])],
+            ...     max_corrections=2,
             ... )
         """
         if input_guardrails:
             self._input_guardrails = GuardrailSet(input_guardrails)
         if output_guardrails:
             self._output_guardrails = GuardrailSet(output_guardrails)
+        self._max_corrections = max_corrections
+        return self
+
+    def with_rules(self, path: str = "AGENTS.md") -> 'Agent':
+        """Load feedforward rules from a markdown file.
+
+        Rules are prepended to the system context and sent with every LLM call.
+        Convention: place an AGENTS.md at your project root.
+
+        Args:
+            path: Path to rules file (default: AGENTS.md)
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("bot").with_rules("AGENTS.md")
+        """
+        from pathlib import Path as _Path
+
+        rules_path = _Path(path)
+        if not rules_path.exists():
+            logger.warning(f"Rules file not found: {path}")
+            return self
+
+        rules_content = rules_path.read_text().strip()
+
+        # Prepend rules to existing context
+        if self.context:
+            self.context = f"=== Project Rules ===\n{rules_content}\n=== End Rules ===\n\n{self.context}"
+        else:
+            self.context = f"=== Project Rules ===\n{rules_content}\n=== End Rules ==="
+
+        logger.info(f"Loaded {len(rules_content)} chars of rules from {path}")
+        return self
+
+    def with_permissions(self, allow_dangerous: bool = False) -> 'Agent':
+        """Configure tool permission policy.
+
+        By default, tools marked as ToolPermission.DANGEROUS are blocked.
+        Use this to explicitly enable them.
+
+        Args:
+            allow_dangerous: If True, allow DANGEROUS tools to execute.
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("bot").with_permissions(allow_dangerous=True)
+        """
+        self._allow_dangerous = allow_dangerous
         return self
 
     def use(self, *middlewares: BaseMiddleware) -> 'Agent':
@@ -895,9 +959,36 @@ class Agent:
         else:
             full_response = await self._raw_llm_call(prompt, output_schema=output_schema, images=images)
 
-        # Check output guardrails
+        # Output guardrails with self-correction loop
         if self._output_guardrails:
-            self._output_guardrails.check_or_raise(full_response, direction="output")
+            for correction in range(self._max_corrections + 1):
+                failures = self._output_guardrails.check(full_response)
+                if not failures:
+                    break  # All guardrails passed
+
+                if correction == self._max_corrections:
+                    # Exhausted correction attempts, raise
+                    self._output_guardrails.check_or_raise(full_response, direction="output")
+
+                # Feed violation back to LLM for self-correction
+                violation_feedback = "\n".join(f"- {f.reason}" for f in failures)
+                correction_prompt = (
+                    f"Your previous response was rejected for these reasons:\n{violation_feedback}\n\n"
+                    f"Original request: {prompt}\n\n"
+                    f"Regenerate a response that avoids these violations."
+                )
+                self.observer.record(EventType.SELF_CORRECTION, {
+                    "attempt": correction + 1,
+                    "max_attempts": self._max_corrections,
+                    "violations": [f.reason for f in failures],
+                })
+                logger.info(
+                    f"Self-correcting (attempt {correction + 1}/{self._max_corrections}): "
+                    f"{', '.join(f.reason for f in failures)}"
+                )
+                full_response = await self._raw_llm_call(
+                    correction_prompt, output_schema=output_schema, images=images
+                )
 
         # Store in cache if enabled
         if self.cache_enabled and self.cache:
@@ -1115,13 +1206,28 @@ Example response for calculator:
 
         Returns:
             Tool execution result
+
+        Raises:
+            PermissionError: If tool is DANGEROUS and not explicitly allowed
         """
         for tool in self.tools:
             if tool.name == tool_name:
+                # Check tool permissions
+                if tool.permission == ToolPermission.DANGEROUS and not self._allow_dangerous:
+                    self.observer.record(EventType.TOOL_BLOCKED, {
+                        "tool_name": tool_name,
+                        "permission": tool.permission.value,
+                        "reason": "dangerous_not_allowed",
+                    })
+                    raise PermissionError(
+                        f"Tool '{tool_name}' is marked as DANGEROUS and blocked. "
+                        f"Use agent.with_permissions(allow_dangerous=True) to enable."
+                    )
+
                 try:
                     with self.observer.trace(
                         EventType.TOOL_CALL,
-                        {"tool_name": tool_name, "params": parameters}
+                        {"tool_name": tool_name, "permission": tool.permission.value, "params": parameters}
                     ):
                         result = tool.function(**parameters)
                         # Check if result is a coroutine (async function)

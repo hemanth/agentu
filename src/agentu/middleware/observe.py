@@ -25,6 +25,8 @@ class EventType(Enum):
     ERROR = "error"
     SESSION_CREATE = "session_create"
     SESSION_END = "session_end"
+    SELF_CORRECTION = "self_correction"
+    TOOL_BLOCKED = "tool_blocked"
 
 
 class OutputFormat(Enum):
@@ -172,6 +174,8 @@ class Observer:
             EventType.ERROR: f"{RED}✗{RESET}",
             EventType.SESSION_CREATE: f"{GREEN}📝{RESET}",
             EventType.SESSION_END: f"{BLUE}📋{RESET}",
+            EventType.SELF_CORRECTION: f"{BLUE}🔄{RESET}",
+            EventType.TOOL_BLOCKED: f"{RED}🚫{RESET}",
         }.get(event.event_type, "•")
         
         parts = [f"{symbol} {event.event_type.value}"]

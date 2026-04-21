@@ -1,7 +1,20 @@
 """Tool utilities for agentu."""
 
 import inspect
+from enum import Enum
 from typing import Callable, Dict, Any, Optional
+
+
+class ToolPermission(Enum):
+    """Permission level for tool execution.
+    
+    READONLY: Safe, no side effects. Auto-approved.
+    WRITE: Has side effects but allowed by default. Logged with extra scrutiny.
+    DANGEROUS: Blocked unless explicitly allowed via with_permissions().
+    """
+    READONLY = "readonly"
+    WRITE = "write"
+    DANGEROUS = "dangerous"
 
 
 class Tool:
@@ -19,6 +32,9 @@ class Tool:
         >>> # Or customize as needed:
         >>> tool = Tool(add, "Custom description")
         >>> tool = Tool(add, "Description", "custom_name")
+        >>>
+        >>> # With permission scoping:
+        >>> tool = Tool(delete_files, permission=ToolPermission.DANGEROUS)
     """
 
     def __init__(
@@ -26,7 +42,8 @@ class Tool:
         function: Callable,
         description: Optional[str] = None,
         name: Optional[str] = None,
-        parameters: Optional[Dict[str, Any]] = None
+        parameters: Optional[Dict[str, Any]] = None,
+        permission: ToolPermission = ToolPermission.WRITE,
     ):
         """Initialize a Tool.
 
@@ -35,11 +52,13 @@ class Tool:
             description: Optional description (uses docstring if not provided)
             name: Optional name (uses function name if not provided)
             parameters: Optional parameters dict (auto-inferred if not provided)
+            permission: Permission level (default: WRITE)
         """
         self.function = function
         self.name = name or function.__name__
         self.description = description or self._extract_description(function)
         self.parameters = parameters or self._extract_parameters(function)
+        self.permission = permission
 
     @staticmethod
     def _extract_description(function: Callable) -> str:

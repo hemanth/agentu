@@ -22,6 +22,7 @@ class AgentConfig(BaseModel):
     name: str = Field(..., description="Namespace identity of the agent")
     model: str = Field(default="openai/gpt-4o", description="LiteLLM provider formatted string")
     system_prompt: Optional[str] = Field(default=None, description="System instructions baseline")
+    rules: Optional[str] = Field(default=None, description="Path to rules file (e.g. AGENTS.md)")
     
     skills: Optional[List[str]] = Field(default_factory=list, description="Array of GitHub skill URIs")
     notify: Optional[List[str]] = Field(default_factory=list, description="Array of Apprise webhook URLs")
