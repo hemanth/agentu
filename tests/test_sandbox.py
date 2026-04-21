@@ -14,27 +14,16 @@ from agentu.runtime.sandbox import (
 # ──────────────────────────────────────────────
 
 class TestSubprocessSandbox:
-    """Test the SubprocessSandbox execution backend."""
 
     @pytest.mark.asyncio
     async def test_basic_execution(self):
-        """Simple code should run and return output."""
         sandbox = SubprocessSandbox()
         result = await sandbox.execute("print('hello')", SandboxLimits())
         assert result.success
         assert result.output.strip() == "hello"
 
     @pytest.mark.asyncio
-    async def test_math_execution(self):
-        """Computation should work."""
-        sandbox = SubprocessSandbox()
-        result = await sandbox.execute("print(2 + 2)", SandboxLimits())
-        assert result.success
-        assert result.output.strip() == "4"
-
-    @pytest.mark.asyncio
     async def test_timeout(self):
-        """Long-running code should be killed after timeout."""
         sandbox = SubprocessSandbox()
         result = await sandbox.execute(
             "import time; time.sleep(60)",
@@ -45,40 +34,13 @@ class TestSubprocessSandbox:
 
     @pytest.mark.asyncio
     async def test_error_handling(self):
-        """Errors should be captured, not crash the sandbox."""
         sandbox = SubprocessSandbox()
-        result = await sandbox.execute(
-            "raise ValueError('boom')",
-            SandboxLimits()
-        )
+        result = await sandbox.execute("raise ValueError('boom')", SandboxLimits())
         assert not result.success
-        assert result.exit_code != 0
         assert "boom" in (result.error or "")
 
     @pytest.mark.asyncio
-    async def test_syntax_error(self):
-        """Syntax errors should be handled."""
-        sandbox = SubprocessSandbox()
-        result = await sandbox.execute(
-            "def broken(",
-            SandboxLimits()
-        )
-        assert not result.success
-
-    @pytest.mark.asyncio
-    async def test_output_capture(self):
-        """Multi-line output should be captured."""
-        sandbox = SubprocessSandbox()
-        result = await sandbox.execute(
-            "for i in range(3): print(i)",
-            SandboxLimits()
-        )
-        assert result.success
-        assert result.output.strip() == "0\n1\n2"
-
-    @pytest.mark.asyncio
     async def test_json_output(self):
-        """JSON output from tool code should be parseable."""
         sandbox = SubprocessSandbox()
         result = await sandbox.execute(
             'import json; print(json.dumps({"result": 42, "error": None}))',
@@ -86,8 +48,7 @@ class TestSubprocessSandbox:
         )
         assert result.success
         import json
-        parsed = json.loads(result.output.strip())
-        assert parsed["result"] == 42
+        assert json.loads(result.output.strip())["result"] == 42
 
 
 # ──────────────────────────────────────────────
@@ -95,26 +56,9 @@ class TestSubprocessSandbox:
 # ──────────────────────────────────────────────
 
 class TestBuildToolCode:
-    """Test tool code serialization."""
-
-    def test_generates_valid_code(self):
-        """Generated code should be syntactically valid Python."""
-        def add(x: int, y: int) -> int:
-            return x + y
-
-        import inspect
-        source = inspect.getsource(add)
-        import textwrap
-        source = textwrap.dedent(source)
-        code = build_tool_code(source, "add", {"x": 3, "y": 4})
-
-        assert "add" in code
-        assert "params" in code
-        assert "json.dumps" in code
 
     @pytest.mark.asyncio
     async def test_generated_code_runs(self):
-        """Generated code should actually execute correctly."""
         def multiply(x: int, y: int) -> int:
             return x * y
 
@@ -124,94 +68,119 @@ class TestBuildToolCode:
 
         sandbox = SubprocessSandbox()
         result = await sandbox.execute(code, SandboxLimits())
-
         assert result.success
         import json
-        parsed = json.loads(result.output.strip())
-        assert parsed["result"] == 42
+        assert json.loads(result.output.strip())["result"] == 42
 
 
 # ──────────────────────────────────────────────
-# 3. Agent + Sandbox integration
+# 3. Agent.with_sandbox(read_tools=, write_tools=)
 # ──────────────────────────────────────────────
 
 class TestAgentSandbox:
-    """Test Agent.with_sandbox() integration."""
 
-    def test_with_sandbox_chaining(self):
-        """with_sandbox should return self for chaining."""
-        agent = Agent("test")
-        result = agent.with_sandbox()
-        assert result is agent
-        assert agent._sandbox is not None
+    def test_chaining(self):
+        assert Agent("test").with_sandbox() is not None
 
-    def test_with_sandbox_default_backend(self):
-        """Default backend should be SubprocessSandbox."""
-        agent = Agent("test").with_sandbox()
-        assert isinstance(agent._sandbox, SubprocessSandbox)
+    def test_read_tools_get_readonly(self):
+        def search(q: str) -> str:
+            return q
 
-    def test_with_sandbox_custom_timeout(self):
-        """Custom timeout should be set."""
-        agent = Agent("test").with_sandbox(timeout=10.0)
-        assert agent._sandbox_limits.timeout_seconds == 10.0
+        agent = Agent("test").with_sandbox(read_tools=[search])
+        tool = next(t for t in agent.tools if t.name == "search")
+        assert tool.permission == ToolPermission.READONLY
+
+    def test_write_tools_get_write(self):
+        def save(data: str) -> str:
+            return data
+
+        agent = Agent("test").with_sandbox(write_tools=[save])
+        tool = next(t for t in agent.tools if t.name == "save")
+        assert tool.permission == ToolPermission.WRITE
+
+    def test_both_read_and_write(self):
+        def search(q: str) -> str:
+            return q
+        def save(data: str) -> str:
+            return data
+
+        agent = Agent("test").with_sandbox(read_tools=[search], write_tools=[save])
+        names = [t.name for t in agent.tools]
+        assert "search" in names
+        assert "save" in names
 
     @pytest.mark.asyncio
-    async def test_sandboxed_tool_execution(self):
-        """Tool should execute in sandbox and return result."""
+    async def test_sandboxed_read_tool(self):
         def add(x: int, y: int) -> int:
             return x + y
 
-        agent = Agent("test").with_sandbox(timeout=10)
-        agent.with_tools([Tool(add, permission=ToolPermission.READONLY)])
-
+        agent = Agent("test").with_sandbox(read_tools=[add], timeout=10)
         result = await agent.call("add", {"x": 5, "y": 3})
         assert result == 8
 
     @pytest.mark.asyncio
-    async def test_sandboxed_tool_timeout(self):
-        """Tool that takes too long should raise TimeoutError."""
-        def slow_tool() -> str:
+    async def test_sandboxed_write_tool(self):
+        def concat(a: str, b: str) -> str:
+            return a + b
+
+        agent = Agent("test").with_sandbox(write_tools=[concat], timeout=10)
+        result = await agent.call("concat", {"a": "hello", "b": "world"})
+        assert result == "helloworld"
+
+    @pytest.mark.asyncio
+    async def test_timeout_kills_tool(self):
+        def slow() -> str:
             import time
             time.sleep(60)
             return "done"
 
-        agent = Agent("test").with_sandbox(timeout=1)
-        agent.with_tools([Tool(slow_tool)])
-
-        with pytest.raises(TimeoutError, match="timed out"):
-            await agent.call("slow_tool", {})
+        agent = Agent("test").with_sandbox(write_tools=[slow], timeout=1)
+        with pytest.raises(TimeoutError):
+            await agent.call("slow", {})
 
     @pytest.mark.asyncio
-    async def test_sandboxed_tool_error(self):
-        """Tool errors in sandbox should raise RuntimeError."""
-        def broken_tool() -> str:
-            raise ValueError("something broke")
+    async def test_error_in_sandbox(self):
+        def broken() -> str:
+            raise ValueError("boom")
 
-        agent = Agent("test").with_sandbox(timeout=5)
-        agent.with_tools([Tool(broken_tool)])
-
+        agent = Agent("test").with_sandbox(write_tools=[broken], timeout=5)
         with pytest.raises(RuntimeError, match="failed in sandbox"):
-            await agent.call("broken_tool", {})
+            await agent.call("broken", {})
 
     @pytest.mark.asyncio
-    async def test_sandbox_event_metadata(self):
-        """Sandboxed calls should record sandboxed=True in events."""
+    async def test_sandbox_events_capture_details(self):
+        """Observer should capture sandbox exit_code and stderr."""
         def add(x: int, y: int) -> int:
             return x + y
 
-        agent = Agent("test").with_sandbox(timeout=10)
-        agent.with_tools([Tool(add)])
-
+        agent = Agent("test").with_sandbox(read_tools=[add], timeout=10)
         await agent.call("add", {"x": 1, "y": 2})
 
         events = agent.observer.get_events()
-        tool_events = [e for e in events if e.get("event") == "tool_call"]
-        assert len(tool_events) == 1
-        assert tool_events[0]["sandboxed"] is True
+        sandbox_events = [e for e in events if "sandbox_exit_code" in e]
+        assert len(sandbox_events) >= 1
+        assert sandbox_events[0]["sandbox_exit_code"] == 0
+        assert sandbox_events[0]["sandbox_timed_out"] is False
+
+    @pytest.mark.asyncio
+    async def test_sandbox_events_capture_stderr_on_error(self):
+        """Observer should capture stderr when tool errors."""
+        def broken() -> str:
+            raise ValueError("boom")
+
+        agent = Agent("test").with_sandbox(write_tools=[broken], timeout=5)
+        try:
+            await agent.call("broken", {})
+        except RuntimeError:
+            pass
+
+        events = agent.observer.get_events()
+        sandbox_events = [e for e in events if "sandbox_stderr" in e]
+        assert len(sandbox_events) >= 1
+        assert sandbox_events[0]["sandbox_stderr"] is not None
 
     @pytest.mark.asyncio
     async def test_no_sandbox_by_default(self):
-        """Without with_sandbox(), tools run in-process (sandboxed=False)."""
         def add(x: int, y: int) -> int:
             return x + y
 

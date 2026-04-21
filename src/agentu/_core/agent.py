@@ -472,16 +472,21 @@ class Agent:
 
     def with_sandbox(
         self,
+        read_tools: Optional[List[Union[Tool, Callable]]] = None,
+        write_tools: Optional[List[Union[Tool, Callable]]] = None,
         backend=None,
         timeout: float = 30.0,
         max_memory_mb: Optional[int] = 256,
     ) -> 'Agent':
-        """Enable sandboxed tool execution.
+        """Set up a sandboxed execution environment.
 
-        Tools run in an isolated subprocess instead of in-process.
-        Follows the execute(name, input) -> string pattern.
+        Tools in `read_tools` get READONLY permission (no side effects).
+        Tools in `write_tools` get WRITE permission (has side effects).
+        All tools run in an isolated subprocess.
 
         Args:
+            read_tools: Tools with no side effects (READONLY)
+            write_tools: Tools with side effects (WRITE)
             backend: A SandboxBackend instance. Defaults to SubprocessSandbox.
             timeout: Max seconds per tool call (default: 30)
             max_memory_mb: Memory limit in MB (default: 256, None=unlimited)
@@ -490,12 +495,33 @@ class Agent:
             Self for method chaining
 
         Example:
-            >>> from agentu.runtime.sandbox import SubprocessSandbox
-            >>> agent = Agent("bot").with_sandbox()  # uses SubprocessSandbox
-            >>> agent = Agent("bot").with_sandbox(timeout=10)
+            >>> agent = Agent("bot").with_sandbox(
+            ...     read_tools=[search, get_weather],
+            ...     write_tools=[save_file, send_email],
+            ...     timeout=10,
+            ... )
         """
         from ..runtime.sandbox import SubprocessSandbox, SandboxLimits
 
+        # Register read tools with READONLY permission
+        if read_tools:
+            for t in read_tools:
+                if isinstance(t, Tool):
+                    t.permission = ToolPermission.READONLY
+                    self._add_tool_internal(t)
+                else:
+                    self._add_tool_internal(Tool(t, permission=ToolPermission.READONLY))
+
+        # Register write tools with WRITE permission
+        if write_tools:
+            for t in write_tools:
+                if isinstance(t, Tool):
+                    t.permission = ToolPermission.WRITE
+                    self._add_tool_internal(t)
+                else:
+                    self._add_tool_internal(Tool(t, permission=ToolPermission.WRITE))
+
+        # Configure sandbox backend
         self._sandbox = backend or SubprocessSandbox()
         self._sandbox_limits = SandboxLimits(
             timeout_seconds=timeout,
@@ -1316,6 +1342,14 @@ Example response for calculator:
 
         code = build_tool_code(func_source, tool.function.__name__, parameters)
         sandbox_result = await self._sandbox.execute(code, self._sandbox_limits)
+
+        # Record sandbox execution details in observer
+        self.observer.record(EventType.TOOL_CALL, {
+            "tool_name": tool.name,
+            "sandbox_exit_code": sandbox_result.exit_code,
+            "sandbox_timed_out": sandbox_result.timed_out,
+            "sandbox_stderr": sandbox_result.error,
+        })
 
         if sandbox_result.timed_out:
             raise TimeoutError(
