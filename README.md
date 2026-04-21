@@ -27,48 +27,35 @@ result = await agent.infer("Find me laptops under $1500")
 
 ## Declarative Configuration
 
-`agentu` supports a robust, zero-code declarative mapping pattern via deeply typed Pydantic architectures. You can construct and provision agents natively via cleanly structured YAML or JSON payloads to orchestrate Models, System Prompts, Middleware webhooks, cache parameters, and MCP remote extensions.
+You can also deploy agents natively from YAML or JSON configurations, mapping components like Models, System Prompts, Webhooks (via Apprise), Cache settings, and MCP tools with zero-code:
 
-**1. Define your configuration array (`agent.yaml`)**
-
+**1. Create a `bot.yaml` (or `.json`)**
 ```yaml
-# agent.yaml
 name: "support-agent"
 model: "openai/gpt-4o"
-system_prompt: |
-  You are an expert IT escalation agent. Your primary objective
-  is to elegantly route the user's infrastructure queries and 
-  provide concise system resolution.
-
+system_prompt: "You are an expert IT agent."
 notify:
-  - "slack://your-bot-token"
-
+  - "discord://webhook/id"
 cache:
   preset: "distributed"
-  ttl: 7200
 ```
 
-**2. Dynamically instantiate and execute**
-
+**2. Load dynamically**
 ```python
-import asyncio
 from agentu import Agent
-from your_module import resolve_ticket
+import asyncio
 
 async def main():
-    # .from_config strictly validates types and natively applies builder hooks
-    agent = await Agent.from_config("agent.yaml") 
+    agent = await Agent.from_config("bot.yaml")
     
-    # Append localized raw Python executables if necessary
+    # Append local Python rules/tools if desired, then infer!
     agent.with_tools([resolve_ticket])
-    
-    result = await agent.infer("Help me reset my localized gateway router")
-    print(result)
+    await agent.infer("Help me reset my router")
 
 asyncio.run(main())
 ```
 
-> **Note:** Loading `.yaml` files requires the strict dependencies bundle. Install via `pip install agentu[yaml]`. Standard JSON files bypass this routing overhead entirely.
+*(Requires `pip install agentu[yaml]` to load `.yaml` files. JSON loads natively without extra dependencies).*
 
 ## Workflows
 

@@ -555,6 +555,14 @@ class Agent:
             self._llm_session = None
         await self.close_mcp_connections()
 
+    async def __aenter__(self) -> 'Agent':
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit async context manager, closing all resources."""
+        await self.close()
+
     async def with_skills(self, skills: List[Union[Skill, str]], skill_ttl: Optional[int] = 86400) -> 'Agent':
         """Add agent skills with progressive loading.
         
@@ -775,55 +783,85 @@ class Agent:
         prompt: str,
         output_schema: Optional[Type] = None,
         images: Optional[List[str]] = None,
+        max_retries: int = 2,
     ) -> str:
-        """Make the raw HTTP call to the LLM API (no middleware/guardrails)."""
+        """Make the raw HTTP call to the LLM API (no middleware/guardrails).
+        
+        Retries automatically on transient failures (429, 500, 502, 503, 504)
+        with exponential backoff.
+        """
+        RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
         with self.observer.trace(
             EventType.LLM_REQUEST,
             {"model": self.model, "prompt_length": len(prompt)}
         ):
-            try:
-                headers = {"Content-Type": "application/json"}
-                if self.api_key:
-                    headers["Authorization"] = f"Bearer {self.api_key}"
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
-                # Build message content (plain text or multi-part with images)
-                content = build_content_parts(prompt, images)
-                body: Dict[str, Any] = {
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": content}],
-                    "temperature": self.temperature,
-                    "stream": False,
-                }
+            # Build message content (plain text or multi-part with images)
+            content = build_content_parts(prompt, images)
+            body: Dict[str, Any] = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": content}],
+                "temperature": self.temperature,
+                "stream": False,
+            }
 
-                # Add structured output response_format if schema provided
-                if output_schema is not None:
-                    body["response_format"] = build_response_format(output_schema)
+            # Add structured output response_format if schema provided
+            if output_schema is not None:
+                body["response_format"] = build_response_format(output_schema)
 
-                session = await self._get_llm_session()
-                async with session.post(
-                    f"{self.api_base}/chat/completions",
-                    json=body,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    response.raise_for_status()
-                    response_json = await response.json()
+            last_error = None
+            for attempt in range(max_retries + 1):
+                try:
+                    session = await self._get_llm_session()
+                    async with session.post(
+                        f"{self.api_base}/chat/completions",
+                        json=body,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        if response.status in RETRYABLE_STATUSES and attempt < max_retries:
+                            delay = (2 ** attempt) * 1.0  # 1s, 2s
+                            logger.warning(
+                                f"LLM API returned {response.status}, retrying in {delay}s "
+                                f"(attempt {attempt + 1}/{max_retries})"
+                            )
+                            await asyncio.sleep(delay)
+                            continue
 
-                    if "error" in response_json:
-                        logger.error(f"API error: {response_json['error']}")
-                        raise Exception(response_json['error'])
+                        response.raise_for_status()
+                        response_json = await response.json()
 
-                    full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if "error" in response_json:
+                            logger.error(f"API error: {response_json['error']}")
+                            raise Exception(response_json['error'])
 
-                    if not full_response:
-                        logger.error("Empty response from API")
-                        raise Exception("Empty response from API")
+                        full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-                    return full_response
+                        if not full_response:
+                            logger.error("Empty response from API")
+                            raise Exception("Empty response from API")
 
-            except aiohttp.ClientError as e:
-                logger.error(f"Error calling LLM API: {str(e)}")
-                raise
+                        return full_response
+
+                except aiohttp.ClientError as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        delay = (2 ** attempt) * 1.0
+                        logger.warning(
+                            f"LLM API connection error: {e}, retrying in {delay}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(f"LLM API failed after {max_retries + 1} attempts: {e}")
+                        raise
+
+            # Should not reach here, but just in case
+            raise last_error or Exception("LLM call failed after retries")
 
     async def _call_llm(
         self,
@@ -1045,13 +1083,27 @@ Example response for calculator:
 
         try:
             response = await self._call_llm(prompt)
-            return json.loads(response)
-        except json.JSONDecodeError as e:
+            # Strip markdown code fences if present
+            cleaned = response.strip()
+            if cleaned.startswith("```"):
+                # Remove opening fence (with optional language tag)
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            # Try to find JSON object if there's extra text around it
+            if not cleaned.startswith("{"):
+                start = cleaned.find("{")
+                end = cleaned.rfind("}") + 1
+                if start != -1 and end > start:
+                    cleaned = cleaned[start:end]
+            return json.loads(cleaned)
+        except (json.JSONDecodeError, Exception) as e:
             logger.error(f"Error parsing LLM response: {str(e)}")
             return {
                 "selected_tool": None,
                 "parameters": {},
-                "reasoning": "Error parsing response"
+                "reasoning": f"Error parsing response: {str(e)}"
             }
 
     async def call(self, tool_name: str, parameters: Dict[str, Any]) -> Any:

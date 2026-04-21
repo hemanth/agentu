@@ -1,7 +1,7 @@
 """Search functionality for agentu."""
 import asyncio
 from typing import List, Dict, Any, Optional
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 from .._core.agent import Agent
 from .._core.tools import Tool
