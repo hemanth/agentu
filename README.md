@@ -1,6 +1,6 @@
 # agentu
 
-Build AI agents that actually do things.
+A harness-engineered AI agent runtime. Build agents with tool isolation, self-correction, and permission scoping out of the box.
 
 ```bash
 pip install agentu
@@ -25,15 +25,83 @@ result = await agent.infer("Find me laptops under $1500")
 
 `call()` runs a tool. `infer()` lets the LLM pick the tool and fill in the parameters from natural language.
 
-## Declarative Configuration
+## Sandboxed tool execution
 
-You can also deploy agents natively from YAML or JSON configurations, mapping components like Models, System Prompts, Webhooks (via Apprise), Cache settings, and MCP tools with zero-code:
+Tools run in isolated subprocesses with timeouts and permission scoping. Separate what the agent can read from what it can write:
+
+```python
+agent = Agent("assistant").with_sandbox(
+    read_tools=[search, get_weather],
+    write_tools=[save_file, send_email],
+    timeout=10,
+)
+
+result = await agent.infer("Find the weather and save it to a file")
+```
+
+- `read_tools` get READONLY permission, no side effects
+- `write_tools` get WRITE permission, side effects allowed
+- Every tool runs in a subprocess, not in your agent's process
+- If a tool hangs past `timeout`, subprocess is killed, agent stays alive
+- Sandbox exit codes, stderr, and timeouts are captured in the observer
+
+## Guardrails with self-correction
+
+When output guardrails fail, the agent retries automatically by feeding the violation back to the LLM:
+
+```python
+agent = Agent("assistant").with_guardrails(
+    output_guardrails=[NoPII(), NoHallucination()],
+    max_corrections=2,
+)
+
+result = await agent.infer("Summarize the customer data")
+# If the LLM leaks PII, it retries up to 2 times with the violation as feedback
+```
+
+## Rule files
+
+Prepend project-level rules to every LLM call:
+
+```python
+agent = Agent("assistant").with_rules("AGENTS.md")
+```
+
+The contents of `AGENTS.md` get prepended to the system prompt. Works with declarative config too:
+
+```yaml
+name: "support-agent"
+model: "openai/gpt-4o"
+rules: "AGENTS.md"
+```
+
+## Tool permissions
+
+Three permission levels control what tools can do:
+
+```python
+from agentu import Agent, Tool, ToolPermission
+
+agent = Agent("bot").with_tools([
+    Tool(search, permission=ToolPermission.READONLY),     # always allowed
+    Tool(save_file, permission=ToolPermission.WRITE),     # allowed, logged
+    Tool(delete_all, permission=ToolPermission.DANGEROUS), # blocked by default
+])
+
+# Explicitly allow DANGEROUS tools
+agent.with_permissions(allow_dangerous=True)
+```
+
+## Declarative configuration
+
+Deploy agents from YAML or JSON with zero code:
 
 **1. Create a `bot.yaml` (or `.json`)**
 ```yaml
 name: "support-agent"
 model: "openai/gpt-4o"
 system_prompt: "You are an expert IT agent."
+rules: "AGENTS.md"
 notify:
   - "discord://webhook/id"
 cache:
@@ -126,7 +194,7 @@ agent.with_cache(preset="distributed", redis_url="redis://localhost:6379")
 
 ### Conversation caching
 
-Full conversation lists cache the same way strings do — deterministic serialization, same hash, same hit:
+Full conversation lists cache the same way strings do -- deterministic serialization, same hash, same hit:
 
 ```python
 conversation = [
@@ -138,7 +206,7 @@ cache.set(conversation, "my-bot", "Looks sunny today.")
 cache.get(conversation, "my-bot")  # → "Looks sunny today."
 ```
 
-The second parameter is a `namespace` — any string that scopes the cache. Usually the model name, but it can be anything.
+The second parameter is a `namespace` -- any string that scopes the cache. Usually the model name, but it can be anything.
 
 ### How matching works
 
@@ -223,19 +291,27 @@ Matching strategies: exact, substring, LLM-as-judge, or custom validators.
 
 ## Observability
 
-All LLM calls and tool executions are tracked automatically:
+All LLM calls, tool executions, self-corrections, and sandbox events are tracked automatically:
 
 ```python
 from agentu import Agent, observe
 
 observe.configure(output="console")  # or "json" or "silent"
 
-agent = Agent("assistant").with_tools([...])
+agent = Agent("assistant").with_sandbox(
+    read_tools=[search],
+    write_tools=[save],
+    timeout=10,
+)
 await agent.infer("Find me laptops")
 
 metrics = agent.observer.get_metrics()
 # {"tool_calls": 3, "total_duration_ms": 1240, "errors": 0}
 ```
+
+Events captured: `tool_call`, `tool_blocked`, `self_correction`, `llm_request`, `inference_start`, `inference_end`, `error`, `session_create`, `session_end`.
+
+Sandbox events include `sandbox_exit_code`, `sandbox_stderr`, and `sandbox_timed_out` for post-mortem debugging.
 
 ### Dashboard
 
@@ -312,7 +388,7 @@ agent = Agent("payments").with_tools(defer=[charge_card, send_receipt, refund_pa
 result = await agent.infer("charge $50 to card_123")
 ```
 
-A `search_tools` function is auto-added. The agent searches, activates, and calls — all internally.
+A `search_tools` function is auto-added. The agent searches, activates, and calls -- all internally.
 
 ## MCP
 
@@ -357,8 +433,23 @@ agent.with_tools([func1, func2])          # active tools
 agent.with_tools(defer=[many_funcs])      # searchable tools
 agent.with_cache(preset="smart")          # caching
 agent.with_skills(["github/repo/skill"])  # skills
+agent.with_rules("AGENTS.md")            # project-level rules
 agent.with_notifier(["slack://bot-token"])       # notifications
+agent.with_permissions(allow_dangerous=True)     # permission control
 await agent.with_mcp([url])              # MCP servers
+
+# Sandbox
+agent.with_sandbox(                       # tool isolation
+    read_tools=[search, get_weather],
+    write_tools=[save_file, send_email],
+    timeout=10,
+)
+
+# Guardrails
+agent.with_guardrails(                    # self-correction
+    output_guardrails=[NoPII()],
+    max_corrections=2,
+)
 
 await agent.call("tool", params)          # direct tool execution
 await agent.infer("natural language")     # LLM-routed execution
