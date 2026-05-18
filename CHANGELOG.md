@@ -5,6 +5,16 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-05-17
+
+### Added
+
+- **Rationale Recording**: First-class feature for agents to record architectural decisions and reasoning (ADRs).
+- `EventType.RATIONALE` added to the observability pipeline with a new console icon (💡).
+- `enable_rationale_recording` parameter in `Agent.__init__` to auto-inject the `record_rationale` tool.
+- Rationale events are automatically persisted in SQLite memory as `memory_type="rationale"`.
+- Added `rationale_demo.py` example to demonstrate reasoning workflows.
+
 ## [1.11.0] - 2026-03-02
 
 ### Added

@@ -87,7 +87,8 @@ class Agent:
                  short_term_size: int = 10, use_sqlite: bool = True,
                  priority: int = 5, api_base: str = "http://localhost:11434/v1",
                  api_key: Optional[str] = None, max_turns: int = 10,
-                 cache: bool = False, cache_ttl: int = 3600):
+                 cache: bool = False, cache_ttl: int = 3600,
+                 enable_rationale_recording: bool = False):
         """Initialize an Agent.
 
         Args:
@@ -106,6 +107,7 @@ class Agent:
             max_turns: Maximum turns for multi-turn inference (default: 10)
             cache: Enable LLM response caching (default: False)
             cache_ttl: Cache time-to-live in seconds (default: 3600 = 1 hour)
+            enable_rationale_recording: Whether to automatically expose the record_rationale tool to the agent (default: False)
         """
         self.name = name
         self.api_base = api_base.rstrip('/')
@@ -176,6 +178,13 @@ class Agent:
 
         # Store MCP config for deferred async loading
         self._pending_mcp_config = mcp_config_path if (load_mcp_tools and mcp_config_path) else None
+
+        if enable_rationale_recording:
+            self._add_tool_internal(Tool(
+                self.record_rationale,
+                description="Record architectural decisions, rationale, or reasons why a specific change or action was taken. Use this to leave an audit trail for future agents.",
+                name="record_rationale"
+            ))
 
     @classmethod
     async def from_config(cls, path: str) -> 'Agent':
@@ -782,6 +791,30 @@ class Agent:
             >>> result = await workflow.run()
         """
         return Step(self, task)
+
+    def record_rationale(self, action: str, reasoning: str) -> str:
+        """Record an architectural decision or reasoning for a specific action.
+
+        Args:
+            action: The action that was taken.
+            reasoning: The rationale or reasoning behind the action.
+
+        Returns:
+            Confirmation string.
+        """
+        self.observer.record(
+            EventType.RATIONALE,
+            metadata={"action": action, "reasoning": reasoning}
+        )
+
+        if self.memory_enabled:
+            self.remember(
+                f"Rationale for {action}: {reasoning}",
+                memory_type="rationale",
+                importance=0.9
+            )
+
+        return f"Rationale for '{action}' recorded successfully."
 
     def remember(self, content: str, memory_type: str = 'conversation',
                 metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,

@@ -27,6 +27,7 @@ class EventType(Enum):
     SESSION_END = "session_end"
     SELF_CORRECTION = "self_correction"
     TOOL_BLOCKED = "tool_blocked"
+    RATIONALE = "rationale"
 
 
 class OutputFormat(Enum):
@@ -176,6 +177,7 @@ class Observer:
             EventType.SESSION_END: f"{BLUE}📋{RESET}",
             EventType.SELF_CORRECTION: f"{BLUE}🔄{RESET}",
             EventType.TOOL_BLOCKED: f"{RED}🚫{RESET}",
+            EventType.RATIONALE: f"{GREEN}💡{RESET}",
         }.get(event.event_type, "•")
         
         parts = [f"{symbol} {event.event_type.value}"]
@@ -191,6 +193,9 @@ class Observer:
             tokens = event.metadata.get('tokens', 0)
             if tokens:
                 parts.append(f"- {tokens} tokens")
+        elif event.event_type == EventType.RATIONALE:
+            action = event.metadata.get('action', 'unknown')
+            parts.append(f"- {action}")
         
         logger.info(" ".join(parts))
     
