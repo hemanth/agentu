@@ -226,6 +226,21 @@ memories = agent.recall(query="communication preferences")
 
 SQLite-backed, searchable, persistent across sessions.
 
+### Rationale Recording (ADRs)
+
+Agents can explicitly record architectural decisions and the reasoning behind their actions, creating an automated audit trail.
+
+```python
+agent = Agent("architect", enable_memory=True, enable_rationale_recording=True)
+
+# The agent will automatically evaluate trade-offs and use the `record_rationale` tool
+await agent.infer("Should we use threading or asyncio? Record your reasoning.")
+
+# Retrieve the decision later
+memories = agent.recall(query="asyncio")
+```
+
+Rationale events are simultaneously saved to memory (with `memory_type="rationale"`) and emitted to the observability pipeline.
 ## Skills
 
 Load domain expertise on demand, either from local paths or GitHub:
