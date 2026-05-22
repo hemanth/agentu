@@ -88,7 +88,8 @@ class Agent:
                  priority: int = 5, api_base: str = "http://localhost:11434/v1",
                  api_key: Optional[str] = None, max_turns: int = 10,
                  cache: bool = False, cache_ttl: int = 3600,
-                 enable_rationale_recording: bool = False):
+                 enable_rationale_recording: bool = False,
+                 codemode: bool = False):
         """Initialize an Agent.
 
         Args:
@@ -108,8 +109,12 @@ class Agent:
             cache: Enable LLM response caching (default: False)
             cache_ttl: Cache time-to-live in seconds (default: 3600 = 1 hour)
             enable_rationale_recording: Whether to automatically expose the record_rationale tool to the agent (default: False)
+            codemode: If True, the LLM writes Python code to call tools instead of
+                      making individual JSON tool calls. More token-efficient for multi-step
+                      tasks and leverages LLMs' strength at writing code. (default: False)
         """
         self.name = name
+        self.codemode = codemode
         self.api_base = api_base.rstrip('/')
         self.api_key = api_key
 
@@ -486,6 +491,7 @@ class Agent:
         backend=None,
         timeout: float = 30.0,
         max_memory_mb: Optional[int] = 256,
+        codemode: bool = False,
     ) -> 'Agent':
         """Set up a sandboxed execution environment.
 
@@ -493,12 +499,17 @@ class Agent:
         Tools in `write_tools` get WRITE permission (has side effects).
         All tools run in an isolated subprocess.
 
+        When codemode=True, the LLM writes Python code that calls tools via
+        a typed API, instead of making individual JSON tool calls. The code
+        runs in the sandbox with the same isolation and timeout guarantees.
+
         Args:
             read_tools: Tools with no side effects (READONLY)
             write_tools: Tools with side effects (WRITE)
             backend: A SandboxBackend instance. Defaults to SubprocessSandbox.
             timeout: Max seconds per tool call (default: 30)
             max_memory_mb: Memory limit in MB (default: 256, None=unlimited)
+            codemode: If True, enable code mode for this sandbox (default: False)
 
         Returns:
             Self for method chaining
@@ -508,6 +519,7 @@ class Agent:
             ...     read_tools=[search, get_weather],
             ...     write_tools=[save_file, send_email],
             ...     timeout=10,
+            ...     codemode=True,
             ... )
         """
         from ..runtime.sandbox import SubprocessSandbox, SandboxLimits
@@ -536,7 +548,9 @@ class Agent:
             timeout_seconds=timeout,
             max_memory_mb=max_memory_mb,
         )
-        logger.info(f"Sandbox enabled: {type(self._sandbox).__name__} (timeout={timeout}s)")
+        if codemode:
+            self.codemode = True
+        logger.info(f"Sandbox enabled: {type(self._sandbox).__name__} (timeout={timeout}s, codemode={self.codemode})")
         return self
 
     def use(self, *middlewares: BaseMiddleware) -> 'Agent':
@@ -932,6 +946,205 @@ class Agent:
             prompt_parts.append(f"Parameters: {json.dumps(tool.parameters, indent=2)}\n")
         
         return "\n".join(prompt_parts)
+
+    def _generate_type_stubs(self) -> str:
+        """Generate Python type stubs from registered tools for codemode.
+
+        Converts Tool objects into typed Python function signatures with
+        docstrings, so the LLM can write code that calls them naturally.
+
+        Returns:
+            Python code string defining the `tools` namespace
+        """
+        import inspect as _inspect
+
+        lines = ["class tools:"]
+        lines.append('    """Available tools. Call these as tools.name(args)."""')
+
+        if not self.tools:
+            lines.append("    pass")
+            return "\n".join(lines)
+
+        for tool in self.tools:
+            # Build parameter signature from tool's extracted parameters
+            params = []
+            for param_name, param_type in tool.parameters.items():
+                # param_type is like "str" or "int: (default: 5)"
+                if ": (default:" in str(param_type):
+                    type_part = str(param_type).split(":")[0].strip()
+                    default_part = str(param_type).split("default:")[1].rstrip(")").strip()
+                    params.append(f"{param_name}: {type_part} = {default_part}")
+                else:
+                    params.append(f"{param_name}: {str(param_type)}")
+
+            param_str = ", ".join(params)
+            lines.append("")
+            lines.append("    @staticmethod")
+            lines.append(f"    def {tool.name}({param_str}):")
+            # Add docstring from tool description
+            lines.append(f'        """{tool.description}"""')
+            lines.append("        ...")
+
+        return "\n".join(lines)
+
+    def _build_codemode_prompt(self, user_input: str) -> str:
+        """Build the prompt for codemode: ask LLM to write Python code.
+
+        Args:
+            user_input: The user's natural language request
+
+        Returns:
+            Prompt string for the LLM
+        """
+        type_stubs = self._generate_type_stubs()
+
+        return f"""{self.context}
+
+You have access to the following Python API:
+
+```python
+{type_stubs}
+```
+
+Write Python code that accomplishes the user's request by calling these tools.
+The `tools` object is already available in your execution environment.
+
+Rules:
+- Call tools as: tools.tool_name(arg1, arg2)
+- Use print() to output results the user should see
+- You can chain multiple tool calls, use variables, loops, try/except
+- Only use the tools defined above — no imports, no file I/O, no network access
+- Output ONLY a Python code block, no explanation
+
+User request: {user_input}"""
+
+    async def _exec_codemode(self, code: str) -> str:
+        """Execute LLM-generated code with the tools namespace.
+
+        Builds a namespace with a `tools` object that proxies to real tool
+        functions, executes the code, and captures stdout output.
+
+        Args:
+            code: Python code string from the LLM
+
+        Returns:
+            Captured stdout output from the code execution
+        """
+        import io
+        import sys
+        import contextlib
+        import inspect as _inspect
+
+        # Build the tools proxy object
+        class ToolsBridge:
+            """Proxy that routes tool.name() calls to real tool functions."""
+            pass
+
+        bridge = ToolsBridge()
+        for tool in self.tools:
+            # Handle both sync and async tool functions
+            func = tool.function
+            if _inspect.iscoroutinefunction(func):
+                # Wrap async functions to run synchronously within exec
+                import functools
+                def make_sync_wrapper(async_fn):
+                    @functools.wraps(async_fn)
+                    def wrapper(*args, **kwargs):
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # We're inside an async context, use a thread
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as pool:
+                                return pool.submit(
+                                    asyncio.run, async_fn(*args, **kwargs)
+                                ).result()
+                        return loop.run_until_complete(async_fn(*args, **kwargs))
+                    return wrapper
+                setattr(bridge, tool.name, make_sync_wrapper(func))
+            else:
+                setattr(bridge, tool.name, func)
+
+        # Safe import: allow standard library modules, block dangerous ones
+        _SAFE_MODULES = frozenset({
+            "math", "json", "re", "collections", "itertools", "functools",
+            "string", "datetime", "decimal", "fractions", "statistics",
+            "textwrap", "copy", "operator", "random", "hashlib", "base64",
+            "urllib.parse", "html", "csv", "io",
+        })
+        _BLOCKED_MODULES = frozenset({
+            "os", "sys", "subprocess", "shutil", "socket", "http",
+            "ftplib", "smtplib", "ctypes", "signal", "multiprocessing",
+            "threading", "importlib", "pathlib", "tempfile", "glob",
+            "webbrowser", "code", "codeop", "compile", "compileall",
+        })
+        _import_cache = {}
+
+        def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+            top = name.split(".")[0]
+            if top in _BLOCKED_MODULES or name in _BLOCKED_MODULES:
+                raise ImportError(f"Import of '{name}' is not allowed in codemode")
+            if name not in _SAFE_MODULES and top not in _SAFE_MODULES:
+                raise ImportError(
+                    f"Import of '{name}' is not allowed in codemode. "
+                    f"Allowed modules: {', '.join(sorted(_SAFE_MODULES))}"
+                )
+            if name not in _import_cache:
+                import importlib
+                _import_cache[name] = importlib.import_module(name)
+            return _import_cache[name]
+
+        # Execute with captured stdout
+        namespace = {"tools": bridge, "__builtins__": {
+            "__import__": _safe_import,
+            "print": print, "len": len, "range": range, "str": str,
+            "int": int, "float": float, "bool": bool, "list": list,
+            "dict": dict, "tuple": tuple, "set": set, "sorted": sorted,
+            "enumerate": enumerate, "zip": zip, "map": map, "filter": filter,
+            "min": min, "max": max, "sum": sum, "abs": abs, "round": round,
+            "isinstance": isinstance, "type": type, "hasattr": hasattr,
+            "getattr": getattr, "True": True, "False": False, "None": None,
+            "Exception": Exception, "ValueError": ValueError,
+            "TypeError": TypeError, "KeyError": KeyError,
+            "IndexError": IndexError, "AttributeError": AttributeError,
+            "ImportError": ImportError, "RuntimeError": RuntimeError,
+        }}
+
+        stdout_capture = io.StringIO()
+        error = None
+
+        try:
+            timeout = self._sandbox_limits.timeout_seconds if self._sandbox_limits else 30.0
+
+            def _run_code():
+                with contextlib.redirect_stdout(stdout_capture):
+                    exec(code, namespace)
+
+            # Run in a thread with timeout to prevent blocking the event loop
+            loop = asyncio.get_event_loop()
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _run_code),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            error = f"Code execution timed out after {timeout}s"
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+
+        output = stdout_capture.getvalue()
+
+        # Record in observer
+        self.observer.record(EventType.TOOL_CALL, {
+            "tool_name": "codemode_exec",
+            "codemode": True,
+            "code_length": len(code),
+            "output_length": len(output),
+            "error": error,
+        })
+
+        if error:
+            return f"Output:\n{output}\n\nError:\n{error}" if output else f"Error: {error}"
+
+        return output if output else "(no output)"
 
     async def _get_llm_session(self) -> aiohttp.ClientSession:
         """Get or create reusable aiohttp session for LLM calls."""
@@ -1455,6 +1668,10 @@ Example response for calculator:
         3. If regular tool called, execute and check if more work needed
         4. If no tool selected (text response), return final result
 
+        When codemode is enabled on the agent, the LLM writes Python code
+        that calls tools via a typed API instead of making individual
+        JSON tool calls.
+
         When output_schema is set and no tools are registered, runs a
         direct structured LLM call instead of the agentic tool loop.
 
@@ -1468,7 +1685,9 @@ Example response for calculator:
             When output_schema is set, includes 'structured' key with validated instance.
         """
         # Track inference start
-        self.observer.record(EventType.INFERENCE_START, {"query": user_input})
+        self.observer.record(EventType.INFERENCE_START, {
+            "query": user_input, "codemode": self.codemode,
+        })
 
         # Load deferred MCP tools on first inference
         if self._pending_mcp_config:
@@ -1503,6 +1722,89 @@ Example response for calculator:
                 metadata={'role': 'user'},
                 importance=0.5
             )
+
+        # ===== CODEMODE PATH =====
+        if self.codemode and self.tools:
+            prompt = self._build_codemode_prompt(user_input)
+            max_corrections = 2
+            last_code = None
+            exec_result = None
+
+            for attempt in range(max_corrections + 1):
+                if attempt == 0:
+                    response = await self._call_llm(prompt, images=images)
+                else:
+                    # Self-correction: feed error back to LLM
+                    correction_prompt = (
+                        f"{prompt}\n\n"
+                        f"Your previous code failed with this error:\n"
+                        f"```\n{exec_result}\n```\n\n"
+                        f"Previous code:\n```python\n{last_code}\n```\n\n"
+                        f"Fix the code and try again. Output ONLY the corrected Python code."
+                    )
+                    self.observer.record(EventType.SELF_CORRECTION, {
+                        "attempt": attempt,
+                        "max_attempts": max_corrections,
+                        "error": exec_result[:500],
+                    })
+                    logger.info(
+                        f"Codemode self-correcting (attempt {attempt}/{max_corrections})"
+                    )
+                    response = await self._call_llm(correction_prompt, images=images)
+
+                # Extract code from LLM response (strip markdown fences)
+                code = response.strip()
+                if code.startswith("```"):
+                    # Remove opening fence (with optional language tag like ```python)
+                    code = code.split("\n", 1)[1] if "\n" in code else code[3:]
+                if code.endswith("```"):
+                    code = code[:-3]
+                code = code.strip()
+                last_code = code
+
+                # Execute the code
+                try:
+                    exec_result = await self._exec_codemode(code)
+                except Exception as e:
+                    exec_result = f"Error: {str(e)}"
+
+                # If no error in output, we're done
+                if not exec_result.startswith("Error:") and "Error:\n" not in exec_result:
+                    break
+
+            final_response = {
+                "tool_used": "codemode",
+                "parameters": {"code": last_code},
+                "reasoning": "LLM generated Python code to call tools",
+                "result": exec_result,
+                "codemode": True,
+                "attempts": attempt + 1,
+            }
+
+            # Store in memory
+            if self.memory_enabled:
+                await asyncio.to_thread(
+                    self.memory.remember,
+                    content=f"Agent: Executed code via codemode - {exec_result[:200]}",
+                    memory_type='conversation',
+                    metadata={'role': 'agent', 'tool': 'codemode', 'code': last_code[:500]},
+                    importance=0.6
+                )
+
+            self.conversation_history.append({
+                "user_input": user_input,
+                "response": final_response,
+                "turns": attempt + 1,
+            })
+
+            self.observer.record(
+                EventType.INFERENCE_END,
+                {"query": user_input, "turns": attempt + 1, "codemode": True}
+            )
+
+            return final_response
+
+        # ===== TRADITIONAL TOOL-CALLING PATH =====
 
         # Auto-match skills based on user input (Level 2 activation)
         active_skills = self._match_skills(user_input)

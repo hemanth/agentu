@@ -38,7 +38,7 @@ from .middleware.middleware import (
 from .middleware.notify import NotifyMiddleware
 from ._core.config import AgentConfig
 
-__version__ = "1.16.0"
+__version__ = "1.19.0"
 __all__ = [
     "Agent",
     "AgentConfig",

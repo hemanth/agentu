@@ -45,6 +45,27 @@ result = await agent.infer("Find the weather and save it to a file")
 - If a tool hangs past `timeout`, subprocess is killed, agent stays alive
 - Sandbox exit codes, stderr, and timeouts are captured in the observer
 
+## Code Mode
+
+Instead of making individual JSON tool calls, the LLM writes Python code that calls your tools directly. Inspired by [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/) — LLMs are better at writing code than making tool calls because they've seen millions of lines of real code, but only synthetic tool-call training data.
+
+```python
+# Code Mode: LLM writes Python that chains the calls
+agent = Agent("bot", codemode=True).with_tools([search, get_weather, save_file])
+await agent.infer("Search for weather in SF and save it")
+# LLM writes:
+#   results = tools.search("weather SF")
+#   weather = tools.get_weather(location="SF")
+#   tools.save_file("weather.txt", weather)
+# ONE round trip, ONE code execution
+```
+
+How it works:
+1. Your tools are converted to typed Python stubs and placed in the system prompt
+2. The LLM writes Python code using `tools.search(query="...")` syntax
+3. Safe stdlib imports allowed (math, json, re) — dangerous ones blocked (os, sys)
+4. Auto-retry: if code fails, error feeds back to LLM for self-correction
+
 ## Guardrails with self-correction
 
 When output guardrails fail, the agent retries automatically by feeding the violation back to the LLM:
