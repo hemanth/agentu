@@ -1,1 +1,1 @@
-"""agentu.workflow - Workflow orchestration and Ralph runner."""
+"""agentu.workflow - Workflow orchestration, Ralph runner, and loop engineering."""

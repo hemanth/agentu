@@ -5,6 +5,18 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-06-28
+
+### Added
+
+- **Loop Engineering** — three new primitives inspired by [Addy Osmani's loop engineering](https://addyosmani.com/blog/loop-engineering/):
+  - **Scheduled Automations** (`agent.with_schedule()`): Run agents on interval or cron cadences with SQLite-persisted findings inbox. Supports `every=N` minutes, `cron="0 9 * * *"`, and Ralph mode scheduling.
+  - **Sub-agents** (`agent.with_subagents()` / `agent.delegate()`): Define maker/checker agent roles from dicts or `.agents/` directory YAML/JSON configs. Built-in maker-checker delegation pattern with configurable correction loops.
+  - **Worktree Isolation** (`agent.with_worktree()`): Git worktree management for parallel agent execution without file collisions. Auto-cleanup, branch naming, graceful non-git fallback.
+- New `EventType` entries: `SCHEDULE_RUN`, `SCHEDULE_FINDING`, `DELEGATE_START`, `DELEGATE_REVIEW`, `WORKTREE_CREATE`, `WORKTREE_CLEANUP`.
+- Lightweight built-in cron parser (zero external dependencies).
+- 66 new tests covering all loop engineering features.
+
 ## [1.18.1] - 2026-05-18
 
 ### Fixed

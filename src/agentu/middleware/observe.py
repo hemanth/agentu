@@ -28,6 +28,12 @@ class EventType(Enum):
     SELF_CORRECTION = "self_correction"
     TOOL_BLOCKED = "tool_blocked"
     RATIONALE = "rationale"
+    SCHEDULE_RUN = "schedule_run"
+    SCHEDULE_FINDING = "schedule_finding"
+    DELEGATE_START = "delegate_start"
+    DELEGATE_REVIEW = "delegate_review"
+    WORKTREE_CREATE = "worktree_create"
+    WORKTREE_CLEANUP = "worktree_cleanup"
 
 
 class OutputFormat(Enum):

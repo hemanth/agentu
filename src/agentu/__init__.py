@@ -21,6 +21,9 @@ from .cache.semantic import SemanticIndex
 from .cache.tiered import TieredCache
 from .cache.sync import CacheSync
 from .workflow.workflow import Step, SequentialStep, ParallelStep, WorkflowCheckpoint, resume_workflow
+from .workflow.schedule import Scheduler, ScheduleConfig, ScheduleStore, Finding, CronParser
+from .workflow.subagent import SubAgentConfig, load_subagent_configs, run_maker_checker
+from .workflow.worktree import WorktreeManager
 from ._core.structured import pydantic_to_json_schema, build_response_format, parse_and_validate
 from ._core.multimodal import build_content_parts, resolve_image, detect_mime_type
 from .middleware import guardrails as guardrails
@@ -38,7 +41,7 @@ from .middleware.middleware import (
 from .middleware.notify import NotifyMiddleware
 from ._core.config import AgentConfig
 
-__version__ = "1.19.1"
+__version__ = "1.20.0"
 __all__ = [
     "Agent",
     "AgentConfig",
@@ -93,6 +96,16 @@ __all__ = [
     "ParallelStep",
     "WorkflowCheckpoint",
     "resume_workflow",
+    # Loop Engineering
+    "Scheduler",
+    "ScheduleConfig",
+    "ScheduleStore",
+    "Finding",
+    "CronParser",
+    "SubAgentConfig",
+    "load_subagent_configs",
+    "run_maker_checker",
+    "WorktreeManager",
     "observe",
     "guardrails",
     # Guardrails

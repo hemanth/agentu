@@ -413,6 +413,71 @@ result = await agent.ralph(
 
 The agent loops until all checkpoints in `PROMPT.md` are complete or limits are reached.
 
+## Loop Engineering
+
+Design the system that prompts your agents. Three primitives for building autonomous loops:
+
+### Scheduled Automations
+
+Run agents on a cadence with findings persisted to SQLite:
+
+```python
+# Every 30 minutes
+agent = Agent("triage").with_schedule(every=30, prompt="Review open issues")
+
+# Cron expression (daily at 9am)
+agent = Agent("ops").with_schedule(cron="0 9 * * *", prompt_file="TRIAGE.md")
+
+# Start the scheduler
+await agent.start()
+
+# Check findings
+findings = agent.findings()  # pending findings
+agent.stop()                 # graceful shutdown
+```
+
+### Sub-agents (maker-checker)
+
+Split the maker from the checker. Define roles inline or from `.agents/` directory:
+
+```python
+agent = Agent("lead").with_subagents([
+    {"name": "coder", "instructions": "Write clean code.", "role": "maker"},
+    {"name": "reviewer", "instructions": "Review for bugs.", "role": "checker"},
+])
+
+# Or load from .agents/ directory
+agent = Agent("lead").with_subagents(".agents/")
+
+result = await agent.delegate("Refactor the auth module")
+# {"result": "...", "review": "APPROVED: ...", "approved": True, "corrections": 0}
+```
+
+Sub-agents inherit the parent's model, tools, and API config unless overridden.
+
+### Worktree Isolation
+
+Isolate parallel agents with git worktrees:
+
+```python
+agent = Agent("builder").with_worktree()
+result = await agent.infer("Refactor auth module")
+# Runs in an isolated git worktree, auto-cleaned after
+```
+
+Combine all three for a full loop:
+
+```python
+agent = (
+    Agent("ops")
+    .with_tools([scan_ci, check_issues])
+    .with_subagents(".agents/")
+    .with_worktree()
+    .with_schedule(every=60, prompt="Triage CI failures")
+)
+await agent.start()
+```
+
 ## Tool search
 
 When you have hundreds of tools, you don't want them all in context. Deferred tools are discovered on-demand:
@@ -473,6 +538,17 @@ agent.with_rules("AGENTS.md")            # project-level rules
 agent.with_notifier(["slack://bot-token"])       # notifications
 agent.with_permissions(allow_dangerous=True)     # permission control
 await agent.with_mcp([url])              # MCP servers
+
+# Loop Engineering
+agent.with_schedule(every=30, prompt="...")       # interval schedule
+agent.with_schedule(cron="0 9 * * *", prompt="...") # cron schedule
+agent.with_subagents([{...}])                    # inline sub-agents
+agent.with_subagents(".agents/")                 # from directory
+agent.with_worktree()                            # git isolation
+await agent.start()                              # start schedules
+agent.stop()                                     # stop schedules
+agent.findings()                                 # get findings
+await agent.delegate("task")                     # maker-checker
 
 # Sandbox
 agent.with_sandbox(                       # tool isolation
