@@ -6,10 +6,20 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import logging
 
-from .structured import build_response_format, parse_and_validate
+from .structured import (
+    build_response_format,
+    parse_and_validate,
+    format_validation_error,
+    StructuredOutputError,
+)
 from .multimodal import build_content_parts
 
 from .tools import Tool, ToolPermission
+from .safety import check_lethal_trifecta, spotlight_untrusted
+from .hooks import (
+    HookAction, HookResult, HookSet, PermissionApprovalRequired,
+    _call_maybe_async, PreToolHook, PostToolHook, OnStopHook,
+)
 from ..mcp.config import load_mcp_servers
 from ..mcp.tool import MCPToolManager
 from ..memory.memory import Memory
@@ -19,6 +29,13 @@ from ..middleware.observe import Observer, EventType, get_config
 from ..middleware.guardrails import Guardrail, GuardrailSet, GuardrailError
 from ..middleware.middleware import BaseMiddleware, MiddlewareChain, CallContext
 from ..middleware.notify import NotifyMiddleware
+
+# Optional embedding imports for semantic matching
+try:
+    from ..cache.embeddings import EmbeddingProvider as _EmbeddingProvider, cosine_similarity as _cosine_similarity
+except ImportError:  # pragma: no cover
+    _EmbeddingProvider = None  # type: ignore[assignment,misc]
+    _cosine_similarity = None  # type: ignore[assignment]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -89,7 +106,9 @@ class Agent:
                  api_key: Optional[str] = None, max_turns: int = 10,
                  cache: bool = False, cache_ttl: int = 3600,
                  enable_rationale_recording: bool = False,
-                 codemode: bool = False):
+                 codemode: bool = False,
+                 auto_discover_rules: bool = True,
+                 rules_dir: Optional[str] = None):
         """Initialize an Agent.
 
         Args:
@@ -112,6 +131,12 @@ class Agent:
             codemode: If True, the LLM writes Python code to call tools instead of
                       making individual JSON tool calls. More token-efficient for multi-step
                       tasks and leverages LLMs' strength at writing code. (default: False)
+            auto_discover_rules: If True, auto-discover AGENTS.md and CLAUDE.md files
+                                 hierarchically from the project root and apply them as
+                                 rules. Checks AGENTS.md, .agents/AGENTS.md, CLAUDE.md,
+                                 .claude/CLAUDE.md in order. (default: True)
+            rules_dir: Directory to start rule discovery from (default: current working
+                       directory). Only used when auto_discover_rules is True.
         """
         self.name = name
         self.codemode = codemode
@@ -174,15 +199,30 @@ class Agent:
         self._max_corrections: int = 0  # disabled until with_guardrails sets it
         self._allow_dangerous: bool = False
 
+        # Hooks (pre_tool, post_tool, on_stop)
+        self._hooks: Optional[HookSet] = None
+
+        # Permission mode: 'auto' (default), 'plan', 'ask-writes'
+        self._permission_mode: str = "auto"
+        self._can_use_tool: Optional[Callable] = None
+
         # Sandbox for tool isolation
         self._sandbox = None
         self._sandbox_limits = None
+        self._worktree_config = None
+        self._context_config = None  # Context compaction config
 
         # Reusable aiohttp session for LLM calls
         self._llm_session: Optional[aiohttp.ClientSession] = None
 
         # Store MCP config for deferred async loading
         self._pending_mcp_config = mcp_config_path if (load_mcp_tools and mcp_config_path) else None
+
+        # Auto-discover AGENTS.md / CLAUDE.md rules
+        self._auto_discover_rules = auto_discover_rules
+        self._rules_dir = rules_dir
+        if auto_discover_rules:
+            self._apply_discovered_rules(rules_dir)
 
         if enable_rationale_recording:
             self._add_tool_internal(Tool(
@@ -276,16 +316,33 @@ class Agent:
             return f"Activated tools: {', '.join(activated)}"
         return f"Tools already active: {', '.join(t.name for t in matches)}"
 
-    def _find_matching_tools(self, query: str, limit: int) -> List[Tool]:
+    def _find_matching_tools(self, query: str, limit: int,
+                             embedding_provider: Optional[Any] = None) -> List[Tool]:
         """Find deferred tools matching the query.
+
+        Uses semantic (embedding-based) matching when *embedding_provider* is
+        supplied and functional, falling back to keyword scoring otherwise.
 
         Args:
             query: Search query
             limit: Maximum results
+            embedding_provider: Optional EmbeddingProvider for semantic ranking.
 
         Returns:
             List of matching Tool objects
         """
+        # --- Try semantic matching first ---------------------------------
+        if embedding_provider is not None and _cosine_similarity is not None:
+            try:
+                semantic_results = self._semantic_match_tools(
+                    query, limit, embedding_provider
+                )
+                if semantic_results:
+                    return semantic_results
+            except Exception as e:
+                logger.debug("Semantic tool matching failed, using keyword fallback: %s", e)
+
+        # --- Keyword-based fallback -------------------------------------
         query_terms = query.lower().split()
         scored = []
 
@@ -297,6 +354,37 @@ class Agent:
 
         scored.sort(reverse=True, key=lambda x: x[0])
         return [tool for _, tool in scored[:limit]]
+
+    def _semantic_match_tools(self, query: str, limit: int,
+                              embedding_provider: Any) -> List[Tool]:
+        """Rank deferred tools by cosine-similarity of their descriptions.
+
+        This is a sync helper that bridges into the async embedding API.
+        Returns an empty list on failure so the caller can fall back.
+        """
+        async def _embed_and_rank():
+            query_vec = await embedding_provider.embed(query)
+            scored = []
+            for tool in self.deferred_tools:
+                text = f"{tool.name} {tool.description}"
+                tool_vec = await embedding_provider.embed(text)
+                score = _cosine_similarity(query_vec, tool_vec)
+                scored.append((score, tool))
+            scored.sort(reverse=True, key=lambda x: x[0])
+            # Return tools with positive similarity
+            return [tool for score, tool in scored[:limit] if score > 0]
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _embed_and_rank()).result()
+        else:
+            return asyncio.run(_embed_and_rank())
 
     def _ensure_search_tool(self) -> None:
         """Add search_tools to active tools if not present."""
@@ -336,6 +424,12 @@ class Agent:
             for tool in defer:
                 self._add_tool_internal(tool, deferred=True)
             self._ensure_search_tool()
+
+        # Check for lethal trifecta across all registered tools
+        all_tools = self.tools + self.deferred_tools
+        report = check_lethal_trifecta(all_tools)
+        if report.has_trifecta:
+            self._trifecta_report = report
 
         return self
 
@@ -466,13 +560,77 @@ class Agent:
         logger.info(f"Loaded {len(rules_content)} chars of rules from {path}")
         return self
 
-    def with_permissions(self, allow_dangerous: bool = False) -> 'Agent':
-        """Configure tool permission policy.
+    def _apply_discovered_rules(self, rules_dir: Optional[str] = None) -> None:
+        """Auto-discover and apply AGENTS.md / CLAUDE.md rules.
 
-        By default, tools marked as ToolPermission.DANGEROUS are blocked.
-        Use this to explicitly enable them.
+        Called during ``__init__`` when ``auto_discover_rules=True``.
+        Searches the project root (or ``rules_dir``) for rule files in this
+        priority order at each directory level:
+
+        1. ``AGENTS.md``
+        2. ``.agents/AGENTS.md``
+        3. ``CLAUDE.md``
+        4. ``.claude/CLAUDE.md``
+
+        Discovered rules are prepended to the agent's context, just like
+        :meth:`with_rules`.
 
         Args:
+            rules_dir: Directory to start searching from (default: cwd).
+        """
+        from ..discovery import discover_and_format_rules
+
+        rules_content = discover_and_format_rules(
+            start_dir=rules_dir,
+            recursive=False,  # Only check root level by default
+            max_depth=0,
+        )
+
+        if not rules_content:
+            return
+
+        # Prepend rules to existing context (same format as with_rules)
+        if self.context:
+            self.context = (
+                f"=== Project Rules (auto-discovered) ===\n"
+                f"{rules_content}\n"
+                f"=== End Rules ===\n\n{self.context}"
+            )
+        else:
+            self.context = (
+                f"=== Project Rules (auto-discovered) ===\n"
+                f"{rules_content}\n"
+                f"=== End Rules ==="
+            )
+
+        logger.info(
+            f"Auto-discovered and applied {len(rules_content)} chars of rules"
+        )
+
+    def with_permissions(
+        self,
+        mode: str = "auto",
+        can_use_tool: Optional[Callable] = None,
+        allow_dangerous: bool = False,
+    ) -> 'Agent':
+        """Configure tool permission policy.
+
+        Permission modes:
+            - ``"auto"``: All tools execute freely (current default behaviour).
+            - ``"plan"``: WRITE and DANGEROUS tools are blocked. The agent can
+              only call READONLY tools.
+            - ``"ask-writes"``: WRITE tools raise
+              :class:`PermissionApprovalRequired` so the caller can prompt
+              the user before allowing execution.
+
+        The ``plan`` mode is implemented as a built-in *pre_tool* hook that
+        denies WRITE tools, so it composes naturally with custom hooks.
+
+        Args:
+            mode: Permission mode — ``"auto"``, ``"plan"``, or ``"ask-writes"``.
+            can_use_tool: Optional async/sync callback
+                ``(tool_name, params, context) -> 'allow' | 'deny' | 'ask'``.
+                Overrides the default mode logic for individual calls.
             allow_dangerous: If True, allow DANGEROUS tools to execute.
 
         Returns:
@@ -480,8 +638,81 @@ class Agent:
 
         Example:
             >>> agent = Agent("bot").with_permissions(allow_dangerous=True)
+            >>> agent = Agent("bot").with_permissions(mode="plan")
+            >>> agent = Agent("bot").with_permissions(
+            ...     mode="ask-writes",
+            ...     can_use_tool=lambda name, params, ctx: "allow",
+            ... )
         """
+        if mode not in ("auto", "plan", "ask-writes"):
+            raise ValueError(f"Invalid permission mode: {mode!r}. Use 'auto', 'plan', or 'ask-writes'.")
+        self._permission_mode = mode
+        self._can_use_tool = can_use_tool
         self._allow_dangerous = allow_dangerous
+
+        # 'plan' mode installs a pre_tool hook that denies WRITE tools
+        if mode == "plan":
+            def _plan_mode_hook(tool_name: str, parameters: Dict[str, Any], context: Dict[str, Any]) -> HookResult:
+                tool_obj = context.get("tool")
+                if tool_obj and tool_obj.permission in (ToolPermission.WRITE, ToolPermission.DANGEROUS):
+                    return HookResult(
+                        action=HookAction.DENY,
+                        reason=f"Tool '{tool_name}' is blocked in plan mode (permission={tool_obj.permission.value}). "
+                               f"Only READONLY tools are allowed.",
+                    )
+                return HookResult(action=HookAction.ALLOW)
+
+            self.with_hooks(pre_tool=_plan_mode_hook)
+
+        return self
+
+    def with_hooks(
+        self,
+        pre_tool: Optional[Union[PreToolHook, List[PreToolHook]]] = None,
+        post_tool: Optional[Union[PostToolHook, List[PostToolHook]]] = None,
+        on_stop: Optional[Union[OnStopHook, List[OnStopHook]]] = None,
+    ) -> 'Agent':
+        """Register lifecycle hooks on this agent.
+
+        Hooks can be sync or async callables.  Multiple calls to
+        ``with_hooks`` are additive — hooks accumulate.
+
+        Args:
+            pre_tool: Called **before** each tool execution.
+                Signature: ``(tool_name, parameters, context) -> HookResult``
+                *context* contains ``{"tool": <Tool object>}``.
+                Return ``HookResult(action=HookAction.DENY, reason=…)`` to
+                block the call, or ``HookResult(action=HookAction.MODIFY,
+                modified_params=…)`` to rewrite parameters.
+            post_tool: Called **after** each tool execution.
+                Signature: ``(tool_name, parameters, result) -> result``
+                The returned value replaces the tool result.
+            on_stop: Called when the agent loop finishes.
+                Signature: ``(final_response) -> final_response``
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> def audit(tool_name, params, ctx):
+            ...     print(f"Calling {tool_name}")
+            ...     return HookResult()  # allow
+            >>> agent = Agent("bot").with_hooks(pre_tool=audit)
+        """
+        if self._hooks is None:
+            self._hooks = HookSet()
+
+        # Normalise single callable into a list
+        if pre_tool is not None:
+            hooks = pre_tool if isinstance(pre_tool, list) else [pre_tool]
+            self._hooks.pre_tool_hooks.extend(hooks)
+        if post_tool is not None:
+            hooks = post_tool if isinstance(post_tool, list) else [post_tool]
+            self._hooks.post_tool_hooks.extend(hooks)
+        if on_stop is not None:
+            hooks = on_stop if isinstance(on_stop, list) else [on_stop]
+            self._hooks.on_stop_hooks.extend(hooks)
+
         return self
 
     def with_sandbox(
@@ -1382,6 +1613,114 @@ User request: {user_input}"""
 
         return full_response
 
+    async def _structured_output_with_retries(
+        self,
+        user_input: str,
+        output_type: Type,
+        images: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Call the LLM and validate output against a Pydantic model, retrying on failure.
+
+        Uses the same ``max_corrections`` limit configured via
+        :meth:`with_guardrails` (default 0 = no retries).
+
+        On each validation failure the error is formatted into a clear
+        correction prompt and fed back to the LLM.
+
+        Args:
+            user_input: Original user prompt.
+            output_type: Pydantic BaseModel class to validate against.
+            images: Optional image sources.
+
+        Returns:
+            Dict with ``result`` (raw JSON), ``structured`` (validated
+            instance), and ``attempts`` (number of LLM calls made).
+
+        Raises:
+            StructuredOutputError: If validation still fails after all
+                retry attempts.
+        """
+        max_retries = self._max_corrections  # reuse guardrail setting
+        last_error: Optional[Exception] = None
+        raw = ""
+
+        for attempt in range(max_retries + 1):
+            if attempt == 0:
+                # First attempt: normal call with schema hint
+                raw = await self._call_llm(
+                    user_input, output_schema=output_type, images=images,
+                )
+            else:
+                # Retry: feed validation error back to LLM
+                assert last_error is not None
+                error_feedback = format_validation_error(last_error, output_type)
+                correction_prompt = (
+                    f"Your previous response was invalid:\n{error_feedback}\n\n"
+                    f"Original request: {user_input}\n\n"
+                    f"Regenerate a valid JSON response."
+                )
+                self.observer.record(EventType.SELF_CORRECTION, {
+                    "attempt": attempt,
+                    "max_attempts": max_retries,
+                    "error": str(last_error)[:500],
+                    "type": "structured_output",
+                })
+                logger.info(
+                    f"Structured output retry (attempt {attempt}/{max_retries}): "
+                    f"{str(last_error)[:200]}"
+                )
+                raw = await self._call_llm(
+                    correction_prompt, output_schema=output_type, images=images,
+                )
+
+            try:
+                validated = parse_and_validate(raw, output_type)
+            except (ValueError, Exception) as exc:
+                last_error = exc
+                if attempt == max_retries:
+                    # Exhausted retries
+                    raise StructuredOutputError(
+                        f"Structured output validation failed after "
+                        f"{attempt + 1} attempt(s): {exc}",
+                        raw_output=raw,
+                        model=output_type,
+                        attempts=attempt + 1,
+                        last_error=str(exc),
+                    ) from exc
+                continue
+
+            # Success
+            result: Dict[str, Any] = {
+                "result": raw,
+                "structured": validated,
+                "attempts": attempt + 1,
+            }
+
+            self.conversation_history.append({
+                "user_input": user_input,
+                "response": result,
+                "turns": attempt + 1,
+            })
+            self.observer.record(
+                EventType.INFERENCE_END,
+                {
+                    "query": user_input,
+                    "turns": attempt + 1,
+                    "structured": True,
+                    "output_type": getattr(output_type, "__name__", str(output_type)),
+                },
+            )
+            return result
+
+        # Should be unreachable, but satisfy the type checker
+        raise StructuredOutputError(  # pragma: no cover
+            "Structured output validation failed",
+            raw_output=raw,
+            model=output_type,
+            attempts=max_retries + 1,
+            last_error=str(last_error),
+        )
+
     async def _stream_llm(
         self,
         prompt: str,
@@ -1589,6 +1928,15 @@ Example response for calculator:
         If a sandbox is enabled via with_sandbox(), tools execute in subprocess
         isolation. Otherwise they run in-process.
 
+        Hooks and permission modes are applied in this order:
+
+        1. DANGEROUS permission check (always)
+        2. ``can_use_tool`` callback (if set)
+        3. ``ask-writes`` mode check
+        4. Pre-tool hooks
+        5. Tool execution
+        6. Post-tool hooks
+
         Args:
             tool_name: Name of the tool to call
             parameters: Parameters to pass to the tool
@@ -1598,10 +1946,11 @@ Example response for calculator:
 
         Raises:
             PermissionError: If tool is DANGEROUS and not explicitly allowed
+            PermissionApprovalRequired: In 'ask-writes' mode for WRITE tools
         """
         for tool in self.tools:
             if tool.name == tool_name:
-                # Check tool permissions
+                # 1. Check DANGEROUS permission (unchanged default behaviour)
                 if tool.permission == ToolPermission.DANGEROUS and not self._allow_dangerous:
                     self.observer.record(EventType.TOOL_BLOCKED, {
                         "tool_name": tool_name,
@@ -1612,6 +1961,57 @@ Example response for calculator:
                         f"Tool '{tool_name}' is marked as DANGEROUS and blocked. "
                         f"Use agent.with_permissions(allow_dangerous=True) to enable."
                     )
+
+                # 2. can_use_tool callback (custom per-call decision)
+                if self._can_use_tool is not None:
+                    decision = await _call_maybe_async(
+                        self._can_use_tool, tool_name, parameters,
+                        {"tool": tool},
+                    )
+                    if decision == "deny":
+                        self.observer.record(EventType.TOOL_BLOCKED, {
+                            "tool_name": tool_name,
+                            "reason": "can_use_tool_denied",
+                        })
+                        raise PermissionError(
+                            f"Tool '{tool_name}' denied by can_use_tool callback."
+                        )
+                    if decision == "ask":
+                        raise PermissionApprovalRequired(
+                            tool_name=tool_name,
+                            parameters=parameters,
+                            reason=f"Tool '{tool_name}' requires approval (can_use_tool returned 'ask').",
+                        )
+
+                # 3. ask-writes mode: WRITE tools need approval
+                if (
+                    self._permission_mode == "ask-writes"
+                    and tool.permission == ToolPermission.WRITE
+                    and self._can_use_tool is None  # skip if callback already handled
+                ):
+                    raise PermissionApprovalRequired(
+                        tool_name=tool_name,
+                        parameters=parameters,
+                        reason=f"Tool '{tool_name}' is a WRITE tool and requires approval in ask-writes mode.",
+                    )
+
+                # 4. Pre-tool hooks
+                if self._hooks and self._hooks.pre_tool_hooks:
+                    hook_result = await self._hooks.run_pre_tool(
+                        tool_name, parameters, {"tool": tool},
+                    )
+                    if hook_result.action == HookAction.DENY:
+                        self.observer.record(EventType.TOOL_BLOCKED, {
+                            "tool_name": tool_name,
+                            "reason": f"pre_tool_hook_denied: {hook_result.reason}",
+                        })
+                        # Return denial reason as a string so the model can
+                        # see it and adjust, rather than raising an exception
+                        # that would abort the entire agent loop.
+                        return f"DENIED: {hook_result.reason}"
+                    if hook_result.action == HookAction.MODIFY:
+                        if hook_result.modified_params is not None:
+                            parameters = hook_result.modified_params
 
                 try:
                     with self.observer.trace(
@@ -1625,12 +2025,23 @@ Example response for calculator:
                     ):
                         # Sandboxed execution path
                         if self._sandbox is not None:
-                            return await self._call_sandboxed(tool, parameters)
+                            result = await self._call_sandboxed(tool, parameters)
+                        else:
+                            # In-process execution (default)
+                            result = tool.function(**parameters)
+                            if asyncio.iscoroutine(result):
+                                result = await result
 
-                        # In-process execution (default)
-                        result = tool.function(**parameters)
-                        if asyncio.iscoroutine(result):
-                            result = await result
+                        # 6. Post-tool hooks
+                        if self._hooks and self._hooks.post_tool_hooks:
+                            result = await self._hooks.run_post_tool(
+                                tool_name, parameters, result,
+                            )
+
+                        # 7. Spotlight untrusted content
+                        if tool.ingests_untrusted and isinstance(result, str):
+                            result = spotlight_untrusted(result)
+
                         return result
                 except Exception as e:
                     logger.error(f"Error calling tool {tool_name}: {str(e)}")
@@ -1693,18 +2104,38 @@ Example response for calculator:
                 return output
         return None
 
-    def _match_skills(self, prompt: str) -> List[Skill]:
+    def _match_skills(self, prompt: str,
+                      embedding_provider: Optional[Any] = None,
+                      semantic_threshold: float = 0.35) -> List[Skill]:
         """Determine which skills are relevant to the prompt.
         
         Uses keyword matching against skill descriptions to activate
-        skills on-demand (Level 2 loading).
+        skills on-demand (Level 2 loading).  When *embedding_provider* is
+        supplied, skills are first ranked by semantic similarity; keyword
+        matching is used as fallback.
         
         Args:
             prompt: User input or task description
+            embedding_provider: Optional EmbeddingProvider for semantic ranking.
+            semantic_threshold: Minimum cosine-similarity to consider a skill
+                matched when using semantic ranking (default: 0.35).
             
         Returns:
             List of matched Skill objects
         """
+        # --- Try semantic matching first ---------------------------------
+        if (embedding_provider is not None and _cosine_similarity is not None
+                and self.skills):
+            try:
+                semantic_matched = self._semantic_match_skills(
+                    prompt, embedding_provider, semantic_threshold
+                )
+                if semantic_matched:
+                    return semantic_matched
+            except Exception as e:
+                logger.debug("Semantic skill matching failed, using keyword fallback: %s", e)
+
+        # --- Keyword-based fallback -------------------------------------
         matched = []
         prompt_lower = prompt.lower()
         
@@ -1730,10 +2161,45 @@ Example response for calculator:
         
         return matched
 
+    def _semantic_match_skills(self, prompt: str, embedding_provider: Any,
+                               threshold: float) -> List[Skill]:
+        """Rank skills by cosine-similarity of their descriptions to the prompt.
+
+        Returns an empty list on failure so the caller can fall back.
+        """
+        async def _embed_and_rank():
+            prompt_vec = await embedding_provider.embed(prompt)
+            scored = []
+            for skill in self.skills:
+                text = f"{skill.name} {skill.description}"
+                skill_vec = await embedding_provider.embed(text)
+                score = _cosine_similarity(prompt_vec, skill_vec)
+                if score >= threshold:
+                    scored.append((score, skill))
+                    logger.info(
+                        "Semantic matched skill: %s (score=%.3f) for prompt: %s...",
+                        skill.name, score, prompt[:50]
+                    )
+            scored.sort(reverse=True, key=lambda x: x[0])
+            return [skill for _, skill in scored]
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _embed_and_rank()).result()
+        else:
+            return asyncio.run(_embed_and_rank())
+
     async def infer(
         self,
         user_input: str,
         output_schema: Optional[Type] = None,
+        output_type: Optional[Type] = None,
         images: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Infer tool and parameters from natural language input.
@@ -1751,24 +2217,81 @@ Example response for calculator:
         When output_schema is set and no tools are registered, runs a
         direct structured LLM call instead of the agentic tool loop.
 
+        When output_type is set, the LLM output is validated against the
+        given Pydantic BaseModel class and retried on validation failure
+        (up to max_corrections times). Returns a validated Pydantic
+        instance in the 'structured' key. Mutually exclusive with
+        output_schema.
+
         Args:
             user_input: Natural language query
-            output_schema: Optional Pydantic BaseModel class for structured output
+            output_schema: Optional Pydantic BaseModel class or JSON schema dict
+                for structured output (raw JSON, no retry)
+            output_type: Optional Pydantic BaseModel class for validated
+                structured output with auto-retry on validation failure
             images: Optional list of image sources (URL, data URI, or local file path)
 
         Returns:
             Dict with tool_used, parameters, reasoning, and result.
-            When output_schema is set, includes 'structured' key with validated instance.
+            When output_schema or output_type is set, includes 'structured'
+            key with validated instance.
+
+        Raises:
+            ValueError: If both output_schema and output_type are provided.
+            StructuredOutputError: If output_type validation fails after all
+                retry attempts.
         """
+        if output_schema is not None and output_type is not None:
+            raise ValueError(
+                "output_schema and output_type are mutually exclusive. "
+                "Use output_type for Pydantic-validated structured output "
+                "with auto-retry, or output_schema for raw JSON schema."
+            )
         # Track inference start
         self.observer.record(EventType.INFERENCE_START, {
             "query": user_input, "codemode": self.codemode,
         })
 
+        # Apply worktree isolation if configured
+        worktree_manager = None
+        if self._worktree_config:
+            from ..workflow.worktree import WorktreeManager
+            worktree_manager = WorktreeManager(
+                branch=self._worktree_config.get('branch'),
+                cleanup=self._worktree_config.get('cleanup', True),
+            )
+            worktree_path = await worktree_manager.create(agent_name=self.name)
+            if worktree_path:
+                self.observer.record(
+                    EventType.WORKTREE_CREATE,
+                    metadata={"agent": self.name, "path": worktree_path}
+                )
+
+        try:
+            return await self._infer_inner(user_input, output_schema, output_type, images)
+        finally:
+            if worktree_manager:
+                await worktree_manager.remove()
+
+    async def _infer_inner(
+        self,
+        user_input: str,
+        output_schema: Optional[Type] = None,
+        output_type: Optional[Type] = None,
+        images: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Inner inference logic, separated for worktree wrapping."""
+
         # Load deferred MCP tools on first inference
         if self._pending_mcp_config:
             await self.with_mcp([self._pending_mcp_config])
             self._pending_mcp_config = None
+
+        # output_type fast path: validated Pydantic output with retry
+        if output_type is not None and not self.tools:
+            return await self._structured_output_with_retries(
+                user_input, output_type, images=images,
+            )
 
         # Structured output fast path: direct LLM call with schema
         if output_schema is not None and not self.tools:
@@ -1896,6 +2419,14 @@ Example response for calculator:
 
             evaluation = await self.evaluate_tool_use(context)
 
+            # Check for text_response (model is done, no more tool calls)
+            if evaluation.get("text_response"):
+                final_response = {
+                    "text_response": evaluation["text_response"],
+                    "history": turn_history,
+                }
+                break
+
             if not evaluation.get("selected_tool"):
                 # No tool selected = task complete or no match
                 if turn_history:
@@ -1907,34 +2438,64 @@ Example response for calculator:
             tool_name = evaluation["selected_tool"]
             parameters = evaluation["parameters"]
 
-            try:
-                result = await self.call(tool_name, parameters)
-            except Exception as e:
-                result = f"Error: {str(e)}"
+            # Execute the tool call(s)
+            # Support parallel tool calls if the model returns additional_tools
+            additional_tools = evaluation.get("additional_tools", [])
+            if additional_tools:
+                # Parallel execution with asyncio.gather
+                async def _safe_call(name, params):
+                    try:
+                        return name, params, await self.call(name, params), None
+                    except Exception as e:
+                        return name, params, None, str(e)
 
-            turn_result = {
-                "turn": turn + 1,
-                "tool_used": tool_name,
-                "parameters": parameters,
-                "reasoning": evaluation.get("reasoning", ""),
-                "result": result
-            }
-            turn_history.append(turn_result)
+                tasks = [_safe_call(tool_name, parameters)]
+                for extra in additional_tools:
+                    tasks.append(_safe_call(extra["tool"], extra.get("parameters", {})))
 
-            # If this was search_tools, continue to next turn
+                results = await asyncio.gather(*tasks)
+
+                for t_name, t_params, t_result, t_error in results:
+                    turn_result = {
+                        "turn": turn + 1,
+                        "tool_used": t_name,
+                        "parameters": t_params,
+                        "reasoning": evaluation.get("reasoning", ""),
+                        "result": t_result if t_error is None else f"Error: {t_error}",
+                    }
+                    turn_history.append(turn_result)
+            else:
+                # Single tool call (most common path)
+                try:
+                    result = await self.call(tool_name, parameters)
+                except Exception as e:
+                    result = f"Error: {str(e)}"
+
+                turn_result = {
+                    "turn": turn + 1,
+                    "tool_used": tool_name,
+                    "parameters": parameters,
+                    "reasoning": evaluation.get("reasoning", ""),
+                    "result": result
+                }
+                turn_history.append(turn_result)
+
+            # search_tools is always a continuation signal
             if tool_name == "search_tools":
                 continue
 
-            # For other tools, check if we should continue
-            # Currently: one non-search tool call = done
-            final_response = turn_result
-            break
+            # Multi-turn: continue looping — the model decides when to stop
+            # by returning no tool or a text_response
 
         if final_response is None:
             final_response = {
                 "error": f"Max turns ({self.max_turns}) reached",
-                "history": turn_history
+                "history": turn_history,
             }
+            # Include last turn result if available
+            if turn_history:
+                final_response["tool_used"] = turn_history[-1].get("tool_used")
+                final_response["result"] = turn_history[-1].get("result")
 
         # Store agent response in memory
         if self.memory_enabled and "tool_used" in final_response:
@@ -1955,6 +2516,27 @@ Example response for calculator:
             "response": final_response,
             "turns": len(turn_history)
         })
+
+        # Apply context compaction if configured
+        if self._context_config:
+            from .context import compact_context, estimate_history_tokens
+            current_tokens = estimate_history_tokens(self.conversation_history)
+            if current_tokens > self._context_config.max_tokens * 0.8:  # 80% threshold
+                self.conversation_history, stats = await compact_context(
+                    self.conversation_history,
+                    self._context_config,
+                    llm_call=self._call_llm,
+                    system_prompt=self.context,
+                )
+                if stats.tokens_saved > 0:
+                    self.observer.record(
+                        EventType.CONTEXT_COMPACTION,
+                        {
+                            "tokens_saved": stats.tokens_saved,
+                            "turns_before": stats.total_turns,
+                            "turns_after": len(self.conversation_history),
+                        }
+                    )
         
         # Track inference end
         self.observer.record(
@@ -1965,6 +2547,10 @@ Example response for calculator:
                 "tool_used": final_response.get('tool_used')
             }
         )
+
+        # On-stop hooks
+        if self._hooks and self._hooks.on_stop_hooks:
+            final_response = await self._hooks.run_on_stop(final_response)
 
         return final_response
 
@@ -2145,6 +2731,47 @@ Example response for calculator:
 
     # ── Loop Engineering: Sub-agents ────────────────────────────────
 
+    def with_otel(
+        self,
+        endpoint: Optional[str] = None,
+        service_name: Optional[str] = None,
+    ) -> 'Agent':
+        """Enable OpenTelemetry GenAI span export for this agent.
+
+        Requires the ``[otel]`` extra to be installed::
+
+            pip install agentu[otel]
+
+        When the ``opentelemetry`` SDK is not available the method is
+        a silent no-op — no errors are raised.
+
+        Args:
+            endpoint: OTLP HTTP exporter endpoint (default: env var or
+                ``http://localhost:4318``).
+            service_name: OTel resource ``service.name`` attribute
+                (default: ``"agentu"``).
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("bot").with_otel(
+            ...     endpoint="http://localhost:4318",
+            ...     service_name="my-agent",
+            ... )
+        """
+        from ..middleware.otel import OTelExporter
+
+        exporter = OTelExporter(
+            service_name=service_name or "agentu",
+            endpoint=endpoint,
+            model=self.model,
+            observer=self.observer,
+        )
+        exporter.attach(self.observer)
+        self._otel_exporter = exporter
+        return self
+
     def with_subagents(
         self,
         agents: Union[str, List[Dict[str, Any]]],
@@ -2179,15 +2806,22 @@ Example response for calculator:
         self,
         task: str,
         max_corrections: int = 1,
+        judges: int = 1,
     ) -> Dict[str, Any]:
         """Delegate a task to sub-agents using maker-checker pattern.
 
         The maker sub-agent executes the task, then the checker reviews
         the output. If rejected, the maker gets correction attempts.
 
+        When ``judges > 1``, multiple checker instances vote on the
+        maker output using a panel consensus model.  The output is
+        approved only when a majority of judges approve.
+
         Args:
             task: The task to delegate
             max_corrections: Max correction attempts on rejection (default: 1)
+            judges: Number of checker instances to use as a judge panel
+                (default: 1 — single checker, original behaviour).
 
         Returns:
             Dict with: result, review, approved, corrections, maker, checker
@@ -2196,8 +2830,10 @@ Example response for calculator:
             >>> result = await agent.delegate("Refactor the auth module")
             >>> if result["approved"]:
             ...     print("Changes approved by reviewer")
+            >>> # Use a panel of 3 judges for higher confidence
+            >>> result = await agent.delegate("Refactor auth", judges=3)
         """
-        from ..workflow.subagent import _build_subagent, run_maker_checker
+        from ..workflow.subagent import _build_subagent, run_maker_checker, run_judge_panel
 
         if not hasattr(self, '_subagent_configs') or not self._subagent_configs:
             raise RuntimeError("No sub-agents configured. Use with_subagents() first.")
@@ -2209,7 +2845,7 @@ Example response for calculator:
             agent = _build_subagent(config, self)
 
             # If worktree is enabled, create isolated worktrees
-            if hasattr(self, '_worktree_config') and self._worktree_config:
+            if self._worktree_config:
                 from ..workflow.worktree import WorktreeManager
                 wt = WorktreeManager(
                     cleanup=self._worktree_config.get('cleanup', True)
@@ -2226,6 +2862,16 @@ Example response for calculator:
             else:
                 makers.append(agent)
 
+        if judges > 1 and checkers:
+            return await run_judge_panel(
+                task=task,
+                makers=makers,
+                checkers=checkers,
+                num_judges=judges,
+                max_corrections=max_corrections,
+                parent_observer=self.observer,
+            )
+
         return await run_maker_checker(
             task=task,
             makers=makers,
@@ -2233,6 +2879,84 @@ Example response for calculator:
             max_corrections=max_corrections,
             parent_observer=self.observer,
         )
+
+    async def best_of(
+        self,
+        n: int,
+        task: str,
+        judge: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Run N instances of this agent in parallel and pick the best.
+
+        Each instance runs the same task independently (using worktree
+        isolation when configured).  A judge agent then evaluates all
+        results and selects the best one.
+
+        Args:
+            n: Number of parallel instances to run.
+            task: The task to run.
+            judge: Optional Agent instance to judge results.  If
+                ``None``, the first result is returned (no judging).
+
+        Returns:
+            Dict with ``result``, ``all_results``, ``chosen_index``,
+            and ``judge_reasoning``.
+
+        Example:
+            >>> result = await agent.best_of(3, "Write a haiku about code")
+        """
+        from ..workflow.subagent import _build_subagent, run_best_of
+
+        return await run_best_of(
+            agent=self,
+            n=n,
+            task=task,
+            judge=judge,
+            parent_observer=self.observer,
+        )
+
+
+    # ── Context Management ──────────────────────────────────────────
+
+    def with_context(
+        self,
+        max_tokens: int = 128_000,
+        compaction: str = "auto",
+        keep_recent: int = 5,
+        max_result_chars: int = 2000,
+    ) -> 'Agent':
+        """Configure context management and compaction.
+
+        Prevents context window overflow in long-running loops by
+        applying tiered compaction strategies:
+          1. Truncate old tool results
+          2. LLM-summarize older turns
+          3. Keep system prompt + recent turns intact
+
+        Args:
+            max_tokens: Approximate max tokens for context (default: 128K)
+            compaction: Strategy - 'none', 'auto', 'truncate', 'summarize'
+            keep_recent: Number of recent turns to always preserve
+            max_result_chars: Max chars per tool result before truncation
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("assistant").with_context(
+            ...     max_tokens=100_000,
+            ...     compaction="auto",
+            ... )
+        """
+        from .context import ContextConfig, CompactionMode
+        self._context_config = ContextConfig(
+            max_tokens=max_tokens,
+            compaction=CompactionMode(compaction),
+            keep_recent=keep_recent,
+            max_result_chars=max_result_chars,
+        )
+        logger.info(f"Context management enabled: max_tokens={max_tokens}, compaction={compaction}")
+        return self
 
     # ── Loop Engineering: Worktree ──────────────────────────────────
 

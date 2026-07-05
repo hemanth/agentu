@@ -17,6 +17,7 @@ class TransportType(Enum):
     HTTP = "http"
     SSE = "sse"
     STDIO = "stdio"
+    STREAMABLE_HTTP = "streamable-http"
 
 
 @dataclass
@@ -57,6 +58,8 @@ class MCPServerConfig:
     transport_type: TransportType
     url: Optional[str] = None
     command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
     auth: Optional[AuthConfig] = None
     timeout: int = 30
 
@@ -75,6 +78,8 @@ class MCPServerConfig:
             transport_type=transport_type,
             url=data.get('url'),
             command=data.get('command'),
+            args=data.get('args'),
+            env=data.get('env'),
             auth=auth,
             timeout=data.get('timeout', 30)
         )
@@ -524,6 +529,250 @@ class MCPSSETransport(MCPTransport):
         logger.info("[SSE] Connection closed")
 
 
+class MCPSTDIOTransport(MCPTransport):
+    """STDIO-based transport for MCP servers.
+
+    Spawns an MCP server as a subprocess and communicates via
+    newline-delimited JSON-RPC over stdin/stdout.
+    """
+
+    def __init__(self, config: MCPServerConfig):
+        super().__init__(config)
+        self.request_id = 0
+        self._process: Optional[asyncio.subprocess.Process] = None
+        self._initialized = False
+        self._read_lock = asyncio.Lock()
+
+    def _next_request_id(self) -> int:
+        """Get next request ID for JSON-RPC."""
+        self.request_id += 1
+        return self.request_id
+
+    async def _start_process(self):
+        """Start the MCP server subprocess."""
+        if self._process is not None and self._process.returncode is None:
+            return  # Already running
+
+        if not self.config.command:
+            raise ValueError("Command is required for STDIO transport")
+
+        cmd_args = self.config.args or []
+
+        # Merge environment variables: inherit current env and overlay config env
+        env = None
+        if self.config.env:
+            import os
+            env = {**os.environ, **self.config.env}
+
+        logger.info(
+            f"[STDIO] Starting subprocess: {self.config.command} {' '.join(cmd_args)}"
+        )
+
+        self._process = await asyncio.create_subprocess_exec(
+            self.config.command,
+            *cmd_args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+
+        logger.info(f"[STDIO] Subprocess started (pid={self._process.pid})")
+
+    async def _write_message(self, message: Dict[str, Any]):
+        """Write a JSON-RPC message to the subprocess stdin."""
+        if self._process is None or self._process.stdin is None:
+            raise RuntimeError("STDIO process is not running")
+
+        data = json.dumps(message) + "\n"
+        self._process.stdin.write(data.encode("utf-8"))
+        await self._process.stdin.drain()
+
+    async def _read_message(self) -> Dict[str, Any]:
+        """Read a JSON-RPC message from the subprocess stdout.
+
+        Reads lines from stdout, skipping empty lines, until a valid
+        JSON-RPC response is received.
+        """
+        if self._process is None or self._process.stdout is None:
+            raise RuntimeError("STDIO process is not running")
+
+        while True:
+            try:
+                line = await asyncio.wait_for(
+                    self._process.stdout.readline(),
+                    timeout=self.config.timeout,
+                )
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"[STDIO] Timeout waiting for response after {self.config.timeout}s"
+                )
+
+            if not line:
+                # EOF — process likely exited
+                returncode = self._process.returncode
+                stderr_output = ""
+                if self._process.stderr:
+                    try:
+                        stderr_bytes = await asyncio.wait_for(
+                            self._process.stderr.read(), timeout=1.0
+                        )
+                        stderr_output = stderr_bytes.decode("utf-8", errors="replace")
+                    except asyncio.TimeoutError:
+                        pass
+                raise ConnectionError(
+                    f"[STDIO] Subprocess exited unexpectedly "
+                    f"(returncode={returncode}): {stderr_output}"
+                )
+
+            line_str = line.decode("utf-8", errors="replace").strip()
+            if not line_str:
+                continue
+
+            try:
+                return json.loads(line_str)
+            except json.JSONDecodeError:
+                # Skip non-JSON lines (e.g. log output from the server)
+                logger.debug(f"[STDIO] Skipping non-JSON line: {line_str[:100]}")
+                continue
+
+    async def send_request(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Send MCP JSON-RPC request over STDIO.
+
+        Writes a JSON-RPC request to stdin and reads the response from stdout.
+        A read lock ensures responses are matched to requests correctly when
+        called concurrently.
+        """
+        await self._start_process()
+
+        req_id = self._next_request_id()
+
+        message: Dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "id": req_id,
+        }
+        if params is not None:
+            message["params"] = params
+
+        logger.info(f"[STDIO] Sending {method} (id:{req_id})")
+
+        async with self._read_lock:
+            await self._write_message(message)
+
+            # Read response — look for matching id
+            response = await self._read_message()
+
+        if "error" in response:
+            logger.error(f"[STDIO] Server error: {response['error']}")
+            raise Exception(f"MCP server error: {response['error']}")
+
+        return response.get("result", {})
+
+    async def initialize(self) -> Dict[str, Any]:
+        """Initialize the MCP session."""
+        if self._initialized:
+            return {}
+
+        result = await self.send_request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "clientInfo": {
+                "name": "agentu",
+                "version": "0.1.0"
+            }
+        })
+
+        # Send initialized notification (no id, no response expected)
+        await self._start_process()
+        notification: Dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        }
+        await self._write_message(notification)
+
+        self._initialized = True
+        logger.info("[STDIO] Initialized MCP session")
+        return result
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        """List available tools from the MCP server."""
+        try:
+            if not self._initialized:
+                await self.initialize()
+
+            result = await self.send_request("tools/list")
+            tools = result.get("tools", [])
+
+            logger.info(f"[STDIO] Listed {len(tools)} tools")
+            return tools
+
+        except Exception as e:
+            logger.error(f"[STDIO] Error listing tools: {e}")
+            raise
+
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        """Call a tool on the MCP server."""
+        try:
+            result = await self.send_request("tools/call", {
+                "name": tool_name,
+                "arguments": arguments
+            })
+
+            # MCP tool responses can contain content array
+            if "content" in result:
+                content = result["content"]
+                if isinstance(content, list) and len(content) > 0:
+                    first_content = content[0]
+                    if isinstance(first_content, dict):
+                        return first_content.get("text", result)
+                    return first_content
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[STDIO] Error calling tool {tool_name}: {e}")
+            raise
+
+    async def close(self):
+        """Close the STDIO connection and terminate the subprocess."""
+        logger.info("[STDIO] Closing connection")
+
+        if self._process is not None and self._process.returncode is None:
+            # Close stdin to signal the subprocess
+            if self._process.stdin:
+                try:
+                    self._process.stdin.close()
+                except Exception:
+                    pass
+
+            # Give the process a moment to exit gracefully
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                logger.info(
+                    f"[STDIO] Subprocess exited gracefully "
+                    f"(returncode={self._process.returncode})"
+                )
+            except asyncio.TimeoutError:
+                # Force kill if it didn't exit
+                logger.warning("[STDIO] Subprocess did not exit, terminating")
+                self._process.terminate()
+                try:
+                    await asyncio.wait_for(self._process.wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    logger.warning("[STDIO] Subprocess did not terminate, killing")
+                    self._process.kill()
+                    await self._process.wait()
+
+        self._process = None
+        self._initialized = False
+        logger.info("[STDIO] Connection closed")
+
+
 def create_transport(config: MCPServerConfig) -> MCPTransport:
     """Factory function to create appropriate transport based on config."""
     if config.transport_type == TransportType.HTTP:
@@ -531,6 +780,14 @@ def create_transport(config: MCPServerConfig) -> MCPTransport:
     elif config.transport_type == TransportType.SSE:
         return MCPSSETransport(config)
     elif config.transport_type == TransportType.STDIO:
-        raise NotImplementedError("STDIO transport not yet implemented")
+        return MCPSTDIOTransport(config)
+    elif config.transport_type == TransportType.STREAMABLE_HTTP:
+        from .extensions import StreamableHTTPTransport
+        auth_headers = config.auth.headers if config.auth else None
+        return StreamableHTTPTransport(
+            url=config.url,
+            auth_headers=auth_headers,
+            timeout=config.timeout,
+        )
     else:
         raise ValueError(f"Unsupported transport type: {config.transport_type}")

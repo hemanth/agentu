@@ -1,8 +1,10 @@
 """Memory module for agentu - provides short-term and long-term memory capabilities."""
 
+import asyncio
 import json
+import math
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
@@ -10,6 +12,13 @@ import logging
 from .storage import create_storage, MemoryStorage
 
 logger = logging.getLogger(__name__)
+
+# Optional imports — available only when cache extras are installed
+try:
+    from ..cache.embeddings import EmbeddingProvider, cosine_similarity
+except ImportError:  # pragma: no cover
+    EmbeddingProvider = None  # type: ignore[assignment,misc]
+    cosine_similarity = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -100,18 +109,29 @@ class ShortTermMemory:
 class LongTermMemory:
     """Long-term memory with persistent storage and semantic organization."""
 
-    def __init__(self, storage_path: Optional[str] = None, use_sqlite: bool = True):
+    def __init__(self, storage_path: Optional[str] = None, use_sqlite: bool = True,
+                 embedding_provider: Optional[Any] = None):
         """Initialize long-term memory.
 
         Args:
             storage_path: Path to file for persistent storage (optional)
             use_sqlite: If True, use SQLite database; otherwise use JSON (default: True)
+            embedding_provider: Optional EmbeddingProvider for semantic search.
+                When provided, an in-memory vector index is built over stored
+                memories so that ``semantic_search`` can find semantically
+                similar entries even when the query shares no keywords with the
+                stored content.
         """
         self.storage_path = storage_path
         self.use_sqlite = use_sqlite
         self.storage: Optional[MemoryStorage] = None
         self.entries: List[MemoryEntry] = []
         self.index_by_type: Dict[str, List[MemoryEntry]] = {}
+
+        # Semantic index (in-memory vectors, no extra DB)
+        self.embedding_provider = embedding_provider
+        self._embeddings: List[List[float]] = []  # parallel to self.entries
+        self._semantic_ready = False
 
         if storage_path:
             self.storage = create_storage(storage_path, use_sqlite=use_sqlite)
@@ -149,6 +169,10 @@ class LongTermMemory:
         if self.storage_path:
             self.save()
 
+        # Append a placeholder embedding — will be filled by
+        # ``add_to_semantic_index`` if the caller awaits it.
+        self._embeddings.append([])
+
         return entry
 
     def search(self, query: str, limit: int = 5) -> List[MemoryEntry]:
@@ -174,6 +198,93 @@ class LongTermMemory:
         matches.sort(key=lambda x: (x.importance * (1 + x.access_count)), reverse=True)
 
         return matches[:limit]
+
+    # --- Semantic search helpers ----------------------------------------
+
+    async def add_to_semantic_index(self, entry: MemoryEntry) -> None:
+        """Compute and store the embedding for a single new entry.
+
+        Call this after ``add()`` when an embedding provider is available.
+        """
+        if self.embedding_provider is None:
+            return
+        try:
+            vec = await self.embedding_provider.embed(entry.content)
+            # Find the entry's position and update its embedding slot
+            idx = self.entries.index(entry)
+            if idx < len(self._embeddings):
+                self._embeddings[idx] = vec
+            else:
+                # Safety: extend if needed
+                while len(self._embeddings) < idx:
+                    self._embeddings.append([])
+                self._embeddings.append(vec)
+            self._semantic_ready = True
+        except Exception as e:
+            logger.warning("Failed to embed memory entry: %s", e)
+
+    async def rebuild_semantic_index(self) -> None:
+        """(Re-)build the in-memory embedding index over all stored entries.
+
+        Called automatically during ``load()`` when an embedding provider is
+        present, but can be invoked manually after bulk inserts.
+        """
+        if self.embedding_provider is None:
+            return
+
+        new_embeddings: List[List[float]] = []
+        for entry in self.entries:
+            try:
+                vec = await self.embedding_provider.embed(entry.content)
+                new_embeddings.append(vec)
+            except Exception as e:
+                logger.warning("Failed to embed entry during rebuild: %s", e)
+                new_embeddings.append([])
+
+        self._embeddings = new_embeddings
+        self._semantic_ready = any(len(v) > 0 for v in self._embeddings)
+        logger.info("Rebuilt semantic index with %d entries", len(self._embeddings))
+
+    async def semantic_search(self, query: str, limit: int = 5,
+                              threshold: float = 0.0) -> List[Tuple[MemoryEntry, float]]:
+        """Search memories by semantic similarity.
+
+        Args:
+            query: Natural-language search query
+            limit: Maximum number of results
+            threshold: Minimum cosine-similarity score (0.0–1.0)
+
+        Returns:
+            List of ``(MemoryEntry, score)`` tuples sorted by descending
+            similarity.  Returns an empty list when the semantic index is
+            not available.
+        """
+        if not self._semantic_ready or self.embedding_provider is None:
+            return []
+        if cosine_similarity is None:  # pragma: no cover
+            return []
+
+        try:
+            query_vec = await self.embedding_provider.embed(query)
+        except Exception as e:
+            logger.warning("Failed to embed query: %s", e)
+            return []
+
+        scored: List[Tuple[MemoryEntry, float]] = []
+        for entry, emb in zip(self.entries, self._embeddings):
+            if not emb:
+                continue
+            score = cosine_similarity(query_vec, emb)
+            if score >= threshold:
+                scored.append((entry, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        # Update access stats for returned entries
+        for entry, _ in scored[:limit]:
+            entry.access_count += 1
+            entry.last_accessed = time.time()
+
+        return scored[:limit]
 
     def get_by_type(self, memory_type: str, limit: Optional[int] = None) -> List[MemoryEntry]:
         """Get memories by type.
@@ -272,7 +383,8 @@ class Memory:
     """Unified memory system combining short-term and long-term memory."""
 
     def __init__(self, short_term_size: int = 10, storage_path: Optional[str] = None,
-                 auto_consolidate: bool = True, use_sqlite: bool = True):
+                 auto_consolidate: bool = True, use_sqlite: bool = True,
+                 embedding_provider: Optional[Any] = None):
         """Initialize memory system.
 
         Args:
@@ -280,10 +392,18 @@ class Memory:
             storage_path: Path for persistent long-term memory storage
             auto_consolidate: Whether to automatically consolidate memories
             use_sqlite: If True, use SQLite database; otherwise use JSON (default: True)
+            embedding_provider: Optional EmbeddingProvider for semantic recall.
+                When supplied, ``recall(semantic=True)`` will rank results by
+                cosine similarity instead of substring matching.
         """
         self.short_term = ShortTermMemory(max_size=short_term_size)
-        self.long_term = LongTermMemory(storage_path=storage_path, use_sqlite=use_sqlite)
+        self.long_term = LongTermMemory(
+            storage_path=storage_path,
+            use_sqlite=use_sqlite,
+            embedding_provider=embedding_provider,
+        )
         self.auto_consolidate = auto_consolidate
+        self.embedding_provider = embedding_provider
 
     def remember(self, content: str, memory_type: str = 'conversation',
                 metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
@@ -305,12 +425,21 @@ class Memory:
 
         # Add to long-term if important or explicitly requested
         if store_long_term or importance >= 0.7:
-            self.long_term.add(content, memory_type, metadata, importance)
+            lt_entry = self.long_term.add(content, memory_type, metadata, importance)
+            # Eagerly index the new entry if an embedding provider is set
+            if self.embedding_provider is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.long_term.add_to_semantic_index(lt_entry))
+                except RuntimeError:
+                    # No running loop — index synchronously
+                    asyncio.run(self.long_term.add_to_semantic_index(lt_entry))
 
         return entry
 
     def recall(self, query: Optional[str] = None, memory_type: Optional[str] = None,
-              limit: int = 5, include_short_term: bool = True) -> List[MemoryEntry]:
+              limit: int = 5, include_short_term: bool = True,
+              semantic: bool = False, semantic_threshold: float = 0.0) -> List[MemoryEntry]:
         """Recall memories.
 
         Args:
@@ -318,6 +447,12 @@ class Memory:
             memory_type: Filter by memory type
             limit: Maximum number of results
             include_short_term: Whether to include short-term memories
+            semantic: If True **and** an embedding provider is available,
+                rank results by cosine similarity instead of substring
+                matching.  Falls back to substring matching when the
+                semantic index is unavailable.  (default: False)
+            semantic_threshold: Minimum cosine-similarity to include a
+                result when ``semantic=True``.  Ignored otherwise.
 
         Returns:
             List of relevant MemoryEntry objects
@@ -326,7 +461,37 @@ class Memory:
 
         # Search long-term memory
         if query:
-            results.extend(self.long_term.search(query, limit=limit))
+            semantic_results = []
+            if semantic and self.long_term._semantic_ready:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+
+                if loop and loop.is_running():
+                    # We're inside an existing event loop — run coroutine
+                    # via a helper that bridges sync → async.
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        semantic_results = pool.submit(
+                            asyncio.run,
+                            self.long_term.semantic_search(
+                                query, limit=limit, threshold=semantic_threshold
+                            )
+                        ).result()
+                else:
+                    semantic_results = asyncio.run(
+                        self.long_term.semantic_search(
+                            query, limit=limit, threshold=semantic_threshold
+                        )
+                    )
+
+            if semantic_results:
+                # semantic_search returns (entry, score) tuples
+                results.extend([entry for entry, _score in semantic_results])
+            else:
+                # Fallback to substring matching
+                results.extend(self.long_term.search(query, limit=limit))
         elif memory_type:
             results.extend(self.long_term.get_by_type(memory_type, limit=limit))
         else:
@@ -352,6 +517,56 @@ class Memory:
         unique_results.sort(key=lambda x: (x.importance, x.timestamp), reverse=True)
 
         return unique_results[:limit]
+
+    async def recall_async(self, query: Optional[str] = None,
+                           memory_type: Optional[str] = None,
+                           limit: int = 5, include_short_term: bool = True,
+                           semantic: bool = False,
+                           semantic_threshold: float = 0.0) -> List[MemoryEntry]:
+        """Async version of ``recall`` — preferred when running inside an event loop.
+
+        Args:
+            query: Search query (if None, returns recent memories)
+            memory_type: Filter by memory type
+            limit: Maximum number of results
+            include_short_term: Whether to include short-term memories
+            semantic: Use semantic (embedding) search when available.
+            semantic_threshold: Minimum cosine-similarity for semantic results.
+
+        Returns:
+            List of relevant MemoryEntry objects
+        """
+        results: List[MemoryEntry] = []
+
+        if query:
+            semantic_results: List[Tuple[MemoryEntry, float]] = []
+            if semantic and self.long_term._semantic_ready:
+                semantic_results = await self.long_term.semantic_search(
+                    query, limit=limit, threshold=semantic_threshold
+                )
+            if semantic_results:
+                results.extend([entry for entry, _ in semantic_results])
+            else:
+                results.extend(self.long_term.search(query, limit=limit))
+        elif memory_type:
+            results.extend(self.long_term.get_by_type(memory_type, limit=limit))
+        else:
+            results.extend(sorted(self.long_term.get_all(),
+                                  key=lambda x: x.timestamp, reverse=True)[:limit])
+
+        if include_short_term:
+            results.extend(self.short_term.get_recent(n=limit))
+
+        seen: set = set()
+        unique: List[MemoryEntry] = []
+        for entry in results:
+            key = (entry.content, entry.timestamp)
+            if key not in seen:
+                seen.add(key)
+                unique.append(entry)
+
+        unique.sort(key=lambda x: (x.importance, x.timestamp), reverse=True)
+        return unique[:limit]
 
     def consolidate_to_long_term(self, importance_threshold: float = 0.6):
         """Move important short-term memories to long-term storage.

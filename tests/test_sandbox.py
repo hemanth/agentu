@@ -50,6 +50,46 @@ class TestSubprocessSandbox:
         import json
         assert json.loads(result.output.strip())["result"] == 42
 
+    @pytest.mark.asyncio
+    async def test_memory_limit_preamble_injected(self):
+        """Test that memory limit preamble is injected on POSIX systems."""
+        import platform
+        if platform.system() == "Windows":
+            pytest.skip("RLIMIT_AS not available on Windows")
+
+        sandbox = SubprocessSandbox()
+        # Code that verifies the preamble ran without error
+        code = "print('preamble_ok')"
+        result = await sandbox.execute(code, SandboxLimits(max_memory_mb=128))
+        assert result.success
+        assert "preamble_ok" in result.output
+
+    @pytest.mark.asyncio
+    async def test_no_memory_limit_when_unlimited(self):
+        """Test that no preamble is injected when max_memory_mb is None."""
+        sandbox = SubprocessSandbox()
+        # Simple code should still work with no memory limit
+        result = await sandbox.execute(
+            "print('no limits')",
+            SandboxLimits(max_memory_mb=None)
+        )
+        assert result.success
+        assert result.output.strip() == "no limits"
+
+    @pytest.mark.asyncio
+    async def test_memory_limit_enforced(self):
+        """Test that exceeding memory limit causes failure on Linux."""
+        import platform
+        if platform.system() != "Linux":
+            pytest.skip("RLIMIT_AS enforcement only works reliably on Linux")
+
+        sandbox = SubprocessSandbox()
+        # Try to allocate 200MB with a 50MB limit -- should fail
+        code = "x = bytearray(200 * 1024 * 1024); print('allocated')"
+        result = await sandbox.execute(code, SandboxLimits(max_memory_mb=50))
+        # The process should fail (MemoryError or killed)
+        assert not result.success
+
 
 # ──────────────────────────────────────────────
 # 2. build_tool_code

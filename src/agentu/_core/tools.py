@@ -44,6 +44,9 @@ class Tool:
         name: Optional[str] = None,
         parameters: Optional[Dict[str, Any]] = None,
         permission: ToolPermission = ToolPermission.WRITE,
+        reads_private: bool = False,
+        ingests_untrusted: bool = False,
+        communicates_externally: bool = False,
     ):
         """Initialize a Tool.
 
@@ -53,12 +56,18 @@ class Tool:
             name: Optional name (uses function name if not provided)
             parameters: Optional parameters dict (auto-inferred if not provided)
             permission: Permission level (default: WRITE)
+            reads_private: Tool can access private/sensitive data (default: False)
+            ingests_untrusted: Tool processes data from untrusted sources (default: False)
+            communicates_externally: Tool can send data outside the system (default: False)
         """
         self.function = function
         self.name = name or function.__name__
         self.description = description or self._extract_description(function)
         self.parameters = parameters or self._extract_parameters(function)
         self.permission = permission
+        self.reads_private = reads_private
+        self.ingests_untrusted = ingests_untrusted
+        self.communicates_externally = communicates_externally
 
     @staticmethod
     def _extract_description(function: Callable) -> str:

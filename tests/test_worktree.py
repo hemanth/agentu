@@ -151,6 +151,90 @@ class TestWorktreeManager:
 
                 mock_remove.assert_called_once()
 
+    def test_init_auto_branch_name(self):
+        """Test _auto_branch_name is initialized to None."""
+        wt = WorktreeManager()
+        assert wt._auto_branch_name is None
+
+    @pytest.mark.asyncio
+    async def test_create_stores_auto_branch_name(self):
+        """Test that auto-generated branch name is stored during create."""
+        wt = WorktreeManager()
+
+        mock_run_result = MagicMock()
+        mock_run_result.returncode = 0
+
+        with patch.object(wt, '_detect_git_root', return_value="/fake/repo"):
+            with patch('subprocess.run', return_value=mock_run_result):
+                path = await wt.create(agent_name="builder")
+
+                assert path is not None
+                assert wt._auto_branch_name is not None
+                assert wt._auto_branch_name.startswith("agent/builder-")
+                assert wt._branch_created is True
+
+    @pytest.mark.asyncio
+    async def test_create_no_auto_branch_with_user_branch(self):
+        """Test that user-specified branches don't set _auto_branch_name."""
+        wt = WorktreeManager(branch="my-feature")
+
+        mock_run_result = MagicMock()
+        mock_run_result.returncode = 0
+
+        with patch.object(wt, '_detect_git_root', return_value="/fake/repo"):
+            with patch('subprocess.run', return_value=mock_run_result):
+                await wt.create(agent_name="builder")
+
+                assert wt._auto_branch_name is None
+                assert wt._branch_created is True
+
+    @pytest.mark.asyncio
+    async def test_remove_deletes_auto_branch(self):
+        """Test that remove() deletes the auto-created branch."""
+        wt = WorktreeManager()
+        wt.worktree_path = "/fake/worktree"
+        wt._branch_created = True
+        wt._auto_branch_name = "agent/builder-abc12345"
+
+        mock_run_result = MagicMock()
+        mock_run_result.returncode = 0
+
+        with patch.object(wt, '_detect_git_root', return_value="/fake/repo"):
+            with patch('subprocess.run', return_value=mock_run_result) as mock_run:
+                await wt.remove()
+
+                # Verify git branch -D was called with the auto branch name
+                branch_delete_calls = [
+                    c for c in mock_run.call_args_list
+                    if "branch" in c[0][0] and "-D" in c[0][0]
+                ]
+                assert len(branch_delete_calls) == 1
+                assert "agent/builder-abc12345" in branch_delete_calls[0][0][0]
+                assert wt._auto_branch_name is None
+                assert wt.worktree_path is None
+
+    @pytest.mark.asyncio
+    async def test_remove_skips_branch_delete_for_user_branch(self):
+        """Test that remove() does NOT delete user-specified branches."""
+        wt = WorktreeManager(branch="my-feature")
+        wt.worktree_path = "/fake/worktree"
+        wt._branch_created = True
+        wt._auto_branch_name = None  # Not set for user branches
+
+        mock_run_result = MagicMock()
+        mock_run_result.returncode = 0
+
+        with patch.object(wt, '_detect_git_root', return_value="/fake/repo"):
+            with patch('subprocess.run', return_value=mock_run_result) as mock_run:
+                await wt.remove()
+
+                # Verify git branch -D was NOT called
+                branch_delete_calls = [
+                    c for c in mock_run.call_args_list
+                    if len(c[0][0]) > 1 and "branch" in c[0][0] and "-D" in c[0][0]
+                ]
+                assert len(branch_delete_calls) == 0
+
 
 class TestAgentWorktreeIntegration:
     """Test Agent.with_worktree() integration."""

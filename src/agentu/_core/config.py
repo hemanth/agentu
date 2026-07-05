@@ -20,7 +20,7 @@ class MCPConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Pydantic model that defines the schema for declarative agent payloads."""
     name: str = Field(..., description="Namespace identity of the agent")
-    model: str = Field(default="openai/gpt-4o", description="LiteLLM provider formatted string")
+    model: str = Field(default="openai/gpt-4o", description="Model identifier string (e.g. 'openai/gpt-4o')")
     system_prompt: Optional[str] = Field(default=None, description="System instructions baseline")
     rules: Optional[str] = Field(default=None, description="Path to rules file (e.g. AGENTS.md)")
     

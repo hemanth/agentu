@@ -62,6 +62,79 @@ def build_response_format(
     }
 
 
+class StructuredOutputError(Exception):
+    """Raised when structured output validation fails after all retry attempts.
+
+    Attributes:
+        raw_output: The raw LLM output that failed validation.
+        model: The Pydantic model class the output was validated against.
+        attempts: Number of attempts made (including the original).
+        last_error: The last validation error message.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_output: str = "",
+        model: Optional[Type] = None,
+        attempts: int = 1,
+        last_error: str = "",
+    ):
+        super().__init__(message)
+        self.raw_output = raw_output
+        self.model = model
+        self.attempts = attempts
+        self.last_error = last_error
+
+
+def format_validation_error(error: Exception, model: Type) -> str:
+    """Format a validation error into a clear, LLM-friendly message.
+
+    Covers both Pydantic v1 and v2 validation errors, JSON decode errors,
+    and generic exceptions.
+
+    Args:
+        error: The exception raised during validation.
+        model: The Pydantic BaseModel class for context.
+
+    Returns:
+        A human-readable string describing what went wrong.
+    """
+    schema = pydantic_to_json_schema(model)
+    schema_str = json.dumps(schema, indent=2)
+
+    # Try to extract structured field-level errors (Pydantic v2 first, then v1)
+    details: Optional[str] = None
+    cause = error.__cause__ if error.__cause__ else error
+    if hasattr(cause, "errors") and callable(cause.errors):
+        try:
+            errs = cause.errors()
+            parts = []
+            for e in errs:
+                loc = " -> ".join(str(l) for l in e.get("loc", []))
+                msg = e.get("msg", str(e))
+                parts.append(f"  - {loc}: {msg}")
+            details = "\n".join(parts)
+        except Exception:
+            pass
+
+    if details:
+        return (
+            f"Your output did not match the required schema.\n"
+            f"Field errors:\n{details}\n\n"
+            f"Required JSON schema:\n{schema_str}\n\n"
+            f"Produce valid JSON matching this schema exactly."
+        )
+
+    return (
+        f"Your output did not match the required schema.\n"
+        f"Error: {error}\n\n"
+        f"Required JSON schema:\n{schema_str}\n\n"
+        f"Produce valid JSON matching this schema exactly."
+    )
+
+
 def parse_and_validate(raw_json: str, model: Type) -> Any:
     """Parse JSON string and validate against a Pydantic model.
 

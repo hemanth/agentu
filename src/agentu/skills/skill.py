@@ -255,6 +255,15 @@ async def load_skill(source: Union[str, 'Skill'], ttl: Optional[int] = 86400) ->
     if skill_json.exists():
         content = await asyncio.to_thread(skill_json.read_text)
         metadata = json.loads(content)
+    elif skill_md.exists():
+        # Parse YAML frontmatter from SKILL.md as primary metadata source
+        from .loader import parse_skill_md_frontmatter
+        md_content = await asyncio.to_thread(skill_md.read_text)
+        frontmatter, _ = parse_skill_md_frontmatter(md_content)
+        metadata = {
+            "name": frontmatter.get("name", path.name),
+            "description": frontmatter.get("description", f"Local skill from {path}"),
+        }
     else:
         metadata = {
             "name": path.name,
