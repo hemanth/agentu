@@ -24,6 +24,13 @@ from ..middleware.guardrails import Guardrail, GuardrailSet, GuardrailError
 from ..middleware.middleware import BaseMiddleware, MiddlewareChain, CallContext
 from ..middleware.notify import NotifyMiddleware
 
+# Optional embedding imports for semantic matching
+try:
+    from ..cache.embeddings import EmbeddingProvider as _EmbeddingProvider, cosine_similarity as _cosine_similarity
+except ImportError:  # pragma: no cover
+    _EmbeddingProvider = None  # type: ignore[assignment,misc]
+    _cosine_similarity = None  # type: ignore[assignment]
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -93,7 +100,9 @@ class Agent:
                  api_key: Optional[str] = None, max_turns: int = 10,
                  cache: bool = False, cache_ttl: int = 3600,
                  enable_rationale_recording: bool = False,
-                 codemode: bool = False):
+                 codemode: bool = False,
+                 auto_discover_rules: bool = True,
+                 rules_dir: Optional[str] = None):
         """Initialize an Agent.
 
         Args:
@@ -116,6 +125,12 @@ class Agent:
             codemode: If True, the LLM writes Python code to call tools instead of
                       making individual JSON tool calls. More token-efficient for multi-step
                       tasks and leverages LLMs' strength at writing code. (default: False)
+            auto_discover_rules: If True, auto-discover AGENTS.md and CLAUDE.md files
+                                 hierarchically from the project root and apply them as
+                                 rules. Checks AGENTS.md, .agents/AGENTS.md, CLAUDE.md,
+                                 .claude/CLAUDE.md in order. (default: True)
+            rules_dir: Directory to start rule discovery from (default: current working
+                       directory). Only used when auto_discover_rules is True.
         """
         self.name = name
         self.codemode = codemode
@@ -189,12 +204,19 @@ class Agent:
         self._sandbox = None
         self._sandbox_limits = None
         self._worktree_config = None
+        self._context_config = None  # Context compaction config
 
         # Reusable aiohttp session for LLM calls
         self._llm_session: Optional[aiohttp.ClientSession] = None
 
         # Store MCP config for deferred async loading
         self._pending_mcp_config = mcp_config_path if (load_mcp_tools and mcp_config_path) else None
+
+        # Auto-discover AGENTS.md / CLAUDE.md rules
+        self._auto_discover_rules = auto_discover_rules
+        self._rules_dir = rules_dir
+        if auto_discover_rules:
+            self._apply_discovered_rules(rules_dir)
 
         if enable_rationale_recording:
             self._add_tool_internal(Tool(
@@ -288,16 +310,33 @@ class Agent:
             return f"Activated tools: {', '.join(activated)}"
         return f"Tools already active: {', '.join(t.name for t in matches)}"
 
-    def _find_matching_tools(self, query: str, limit: int) -> List[Tool]:
+    def _find_matching_tools(self, query: str, limit: int,
+                             embedding_provider: Optional[Any] = None) -> List[Tool]:
         """Find deferred tools matching the query.
+
+        Uses semantic (embedding-based) matching when *embedding_provider* is
+        supplied and functional, falling back to keyword scoring otherwise.
 
         Args:
             query: Search query
             limit: Maximum results
+            embedding_provider: Optional EmbeddingProvider for semantic ranking.
 
         Returns:
             List of matching Tool objects
         """
+        # --- Try semantic matching first ---------------------------------
+        if embedding_provider is not None and _cosine_similarity is not None:
+            try:
+                semantic_results = self._semantic_match_tools(
+                    query, limit, embedding_provider
+                )
+                if semantic_results:
+                    return semantic_results
+            except Exception as e:
+                logger.debug("Semantic tool matching failed, using keyword fallback: %s", e)
+
+        # --- Keyword-based fallback -------------------------------------
         query_terms = query.lower().split()
         scored = []
 
@@ -309,6 +348,37 @@ class Agent:
 
         scored.sort(reverse=True, key=lambda x: x[0])
         return [tool for _, tool in scored[:limit]]
+
+    def _semantic_match_tools(self, query: str, limit: int,
+                              embedding_provider: Any) -> List[Tool]:
+        """Rank deferred tools by cosine-similarity of their descriptions.
+
+        This is a sync helper that bridges into the async embedding API.
+        Returns an empty list on failure so the caller can fall back.
+        """
+        async def _embed_and_rank():
+            query_vec = await embedding_provider.embed(query)
+            scored = []
+            for tool in self.deferred_tools:
+                text = f"{tool.name} {tool.description}"
+                tool_vec = await embedding_provider.embed(text)
+                score = _cosine_similarity(query_vec, tool_vec)
+                scored.append((score, tool))
+            scored.sort(reverse=True, key=lambda x: x[0])
+            # Return tools with positive similarity
+            return [tool for score, tool in scored[:limit] if score > 0]
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _embed_and_rank()).result()
+        else:
+            return asyncio.run(_embed_and_rank())
 
     def _ensure_search_tool(self) -> None:
         """Add search_tools to active tools if not present."""
@@ -477,6 +547,53 @@ class Agent:
 
         logger.info(f"Loaded {len(rules_content)} chars of rules from {path}")
         return self
+
+    def _apply_discovered_rules(self, rules_dir: Optional[str] = None) -> None:
+        """Auto-discover and apply AGENTS.md / CLAUDE.md rules.
+
+        Called during ``__init__`` when ``auto_discover_rules=True``.
+        Searches the project root (or ``rules_dir``) for rule files in this
+        priority order at each directory level:
+
+        1. ``AGENTS.md``
+        2. ``.agents/AGENTS.md``
+        3. ``CLAUDE.md``
+        4. ``.claude/CLAUDE.md``
+
+        Discovered rules are prepended to the agent's context, just like
+        :meth:`with_rules`.
+
+        Args:
+            rules_dir: Directory to start searching from (default: cwd).
+        """
+        from ..discovery import discover_and_format_rules
+
+        rules_content = discover_and_format_rules(
+            start_dir=rules_dir,
+            recursive=False,  # Only check root level by default
+            max_depth=0,
+        )
+
+        if not rules_content:
+            return
+
+        # Prepend rules to existing context (same format as with_rules)
+        if self.context:
+            self.context = (
+                f"=== Project Rules (auto-discovered) ===\n"
+                f"{rules_content}\n"
+                f"=== End Rules ===\n\n{self.context}"
+            )
+        else:
+            self.context = (
+                f"=== Project Rules (auto-discovered) ===\n"
+                f"{rules_content}\n"
+                f"=== End Rules ==="
+            )
+
+        logger.info(
+            f"Auto-discovered and applied {len(rules_content)} chars of rules"
+        )
 
     def with_permissions(
         self,
@@ -1863,18 +1980,38 @@ Example response for calculator:
                 return output
         return None
 
-    def _match_skills(self, prompt: str) -> List[Skill]:
+    def _match_skills(self, prompt: str,
+                      embedding_provider: Optional[Any] = None,
+                      semantic_threshold: float = 0.35) -> List[Skill]:
         """Determine which skills are relevant to the prompt.
         
         Uses keyword matching against skill descriptions to activate
-        skills on-demand (Level 2 loading).
+        skills on-demand (Level 2 loading).  When *embedding_provider* is
+        supplied, skills are first ranked by semantic similarity; keyword
+        matching is used as fallback.
         
         Args:
             prompt: User input or task description
+            embedding_provider: Optional EmbeddingProvider for semantic ranking.
+            semantic_threshold: Minimum cosine-similarity to consider a skill
+                matched when using semantic ranking (default: 0.35).
             
         Returns:
             List of matched Skill objects
         """
+        # --- Try semantic matching first ---------------------------------
+        if (embedding_provider is not None and _cosine_similarity is not None
+                and self.skills):
+            try:
+                semantic_matched = self._semantic_match_skills(
+                    prompt, embedding_provider, semantic_threshold
+                )
+                if semantic_matched:
+                    return semantic_matched
+            except Exception as e:
+                logger.debug("Semantic skill matching failed, using keyword fallback: %s", e)
+
+        # --- Keyword-based fallback -------------------------------------
         matched = []
         prompt_lower = prompt.lower()
         
@@ -1899,6 +2036,40 @@ Example response for calculator:
                 logger.info(f"Matched skill: {skill.name} for prompt: {prompt[:50]}...")
         
         return matched
+
+    def _semantic_match_skills(self, prompt: str, embedding_provider: Any,
+                               threshold: float) -> List[Skill]:
+        """Rank skills by cosine-similarity of their descriptions to the prompt.
+
+        Returns an empty list on failure so the caller can fall back.
+        """
+        async def _embed_and_rank():
+            prompt_vec = await embedding_provider.embed(prompt)
+            scored = []
+            for skill in self.skills:
+                text = f"{skill.name} {skill.description}"
+                skill_vec = await embedding_provider.embed(text)
+                score = _cosine_similarity(prompt_vec, skill_vec)
+                if score >= threshold:
+                    scored.append((score, skill))
+                    logger.info(
+                        "Semantic matched skill: %s (score=%.3f) for prompt: %s...",
+                        skill.name, score, prompt[:50]
+                    )
+            scored.sort(reverse=True, key=lambda x: x[0])
+            return [skill for _, skill in scored]
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _embed_and_rank()).result()
+        else:
+            return asyncio.run(_embed_and_rank())
 
     async def infer(
         self,
@@ -2192,6 +2363,27 @@ Example response for calculator:
             "response": final_response,
             "turns": len(turn_history)
         })
+
+        # Apply context compaction if configured
+        if self._context_config:
+            from .context import compact_context, estimate_history_tokens
+            current_tokens = estimate_history_tokens(self.conversation_history)
+            if current_tokens > self._context_config.max_tokens * 0.8:  # 80% threshold
+                self.conversation_history, stats = await compact_context(
+                    self.conversation_history,
+                    self._context_config,
+                    llm_call=self._call_llm,
+                    system_prompt=self.context,
+                )
+                if stats.tokens_saved > 0:
+                    self.observer.record(
+                        EventType.CONTEXT_COMPACTION,
+                        {
+                            "tokens_saved": stats.tokens_saved,
+                            "turns_before": stats.total_turns,
+                            "turns_after": len(self.conversation_history),
+                        }
+                    )
         
         # Track inference end
         self.observer.record(
@@ -2474,6 +2666,48 @@ Example response for calculator:
             max_corrections=max_corrections,
             parent_observer=self.observer,
         )
+
+    # ── Context Management ──────────────────────────────────────────
+
+    def with_context(
+        self,
+        max_tokens: int = 128_000,
+        compaction: str = "auto",
+        keep_recent: int = 5,
+        max_result_chars: int = 2000,
+    ) -> 'Agent':
+        """Configure context management and compaction.
+
+        Prevents context window overflow in long-running loops by
+        applying tiered compaction strategies:
+          1. Truncate old tool results
+          2. LLM-summarize older turns
+          3. Keep system prompt + recent turns intact
+
+        Args:
+            max_tokens: Approximate max tokens for context (default: 128K)
+            compaction: Strategy - 'none', 'auto', 'truncate', 'summarize'
+            keep_recent: Number of recent turns to always preserve
+            max_result_chars: Max chars per tool result before truncation
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("assistant").with_context(
+            ...     max_tokens=100_000,
+            ...     compaction="auto",
+            ... )
+        """
+        from .context import ContextConfig, CompactionMode
+        self._context_config = ContextConfig(
+            max_tokens=max_tokens,
+            compaction=CompactionMode(compaction),
+            keep_recent=keep_recent,
+            max_result_chars=max_result_chars,
+        )
+        logger.info(f"Context management enabled: max_tokens={max_tokens}, compaction={compaction}")
+        return self
 
     # ── Loop Engineering: Worktree ──────────────────────────────────
 

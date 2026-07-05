@@ -2,8 +2,11 @@
 
 from ._core.agent import Agent
 from ._core.tools import Tool, ToolPermission
+from ._core.hooks import HookAction, HookResult, HookSet, PermissionApprovalRequired
 from .skills.skill import Skill, load_skill
+from .skills.loader import SkillLoader, parse_skill_md_frontmatter, load_skill_from_md
 from .skills.search import SearchAgent, search_tool
+from .discovery import discover_rules, discover_and_format_rules
 from .mcp.config import MCPConfigLoader, load_mcp_servers
 from .mcp.transport import MCPServerConfig, AuthConfig, TransportType
 from .mcp.tool import MCPToolAdapter, MCPToolManager
@@ -48,6 +51,11 @@ __all__ = [
     "Tool",
     "Skill",
     "load_skill",
+    "SkillLoader",
+    "parse_skill_md_frontmatter",
+    "load_skill_from_md",
+    "discover_rules",
+    "discover_and_format_rules",
     "SearchAgent",
     "search_tool",
     "MCPConfigLoader",
@@ -134,4 +142,9 @@ __all__ = [
     "build_content_parts",
     "resolve_image",
     "detect_mime_type",
+    # Hooks & Permissions
+    "HookAction",
+    "HookResult",
+    "HookSet",
+    "PermissionApprovalRequired",
 ]

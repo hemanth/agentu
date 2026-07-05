@@ -34,6 +34,7 @@ class EventType(Enum):
     DELEGATE_REVIEW = "delegate_review"
     WORKTREE_CREATE = "worktree_create"
     WORKTREE_CLEANUP = "worktree_cleanup"
+    CONTEXT_COMPACTION = "context_compaction"
 
 
 class OutputFormat(Enum):
