@@ -37,7 +37,6 @@ except ImportError:  # pragma: no cover
     _EmbeddingProvider = None  # type: ignore[assignment,misc]
     _cosine_similarity = None  # type: ignore[assignment]
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -722,6 +721,7 @@ class Agent:
         backend=None,
         timeout: float = 30.0,
         max_memory_mb: Optional[int] = 256,
+        allow_network: bool = True,
         codemode: bool = False,
     ) -> 'Agent':
         """Set up a sandboxed execution environment.
@@ -740,6 +740,8 @@ class Agent:
             backend: A SandboxBackend instance. Defaults to SubprocessSandbox.
             timeout: Max seconds per tool call (default: 30)
             max_memory_mb: Memory limit in MB (default: 256, None=unlimited)
+            allow_network: Allow outbound network access (default: True).
+                Set to False to block HTTP via proxy env vars.
             codemode: If True, enable code mode for this sandbox (default: False)
 
         Returns:
@@ -750,7 +752,7 @@ class Agent:
             ...     read_tools=[search, get_weather],
             ...     write_tools=[save_file, send_email],
             ...     timeout=10,
-            ...     codemode=True,
+            ...     allow_network=False,
             ... )
         """
         from ..runtime.sandbox import SubprocessSandbox, SandboxLimits
@@ -778,6 +780,7 @@ class Agent:
         self._sandbox_limits = SandboxLimits(
             timeout_seconds=timeout,
             max_memory_mb=max_memory_mb,
+            allow_network=allow_network,
         )
         if codemode:
             self.codemode = True
@@ -1080,7 +1083,8 @@ class Agent:
         self.memory.remember(content, memory_type, metadata, importance, store_long_term)
 
     def recall(self, query: Optional[str] = None, memory_type: Optional[str] = None,
-              limit: int = 5, include_short_term: bool = True):
+              limit: int = 5, include_short_term: bool = True,
+              semantic: bool = False, semantic_threshold: float = 0.0):
         """Recall memories.
 
         Args:
@@ -1088,6 +1092,9 @@ class Agent:
             memory_type: Filter by memory type
             limit: Maximum number of results
             include_short_term: Whether to include short-term memories
+            semantic: If True, use embedding-based similarity search
+                instead of substring matching (requires embedding provider)
+            semantic_threshold: Minimum similarity score for semantic recall
 
         Returns:
             List of MemoryEntry objects
@@ -1096,7 +1103,10 @@ class Agent:
             logger.warning("Memory is not enabled for this agent")
             return []
 
-        return self.memory.recall(query, memory_type, limit, include_short_term)
+        return self.memory.recall(
+            query, memory_type, limit, include_short_term,
+            semantic=semantic, semantic_threshold=semantic_threshold,
+        )
 
     def get_memory_context(self, max_entries: int = 5) -> str:
         """Get formatted context from memories.

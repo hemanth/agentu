@@ -375,9 +375,9 @@ await session.send("What's the weather in SF?")
 await session.send("What about tomorrow?")  # knows you mean SF
 
 # Checkpoint and resume
-await session.checkpoint()              # save to SQLite
-session = await manager.resume("sid")   # restore later
-await session.checkpoint(fork=True)     # branch into a new session
+session.checkpoint()                    # save to SQLite
+session = manager.resume("sid", agent)  # restore later
+session.checkpoint(fork=True)           # branch into a new session
 ```
 
 Multi-user isolation, SQLite persistence, session timeout handling, checkpoint/resume.
@@ -766,8 +766,8 @@ agent.recall(query, semantic=True)        # semantic memory search
 manager = SessionManager()
 session = manager.create_session(agent)
 await session.send("message")
-await session.checkpoint()                # save state
-session = await manager.resume("sid")     # restore state
+session.checkpoint()                # save state
+session = manager.resume("sid", agent)  # restore state
 
 # Evaluation
 results = await evaluate(agent, test_cases)

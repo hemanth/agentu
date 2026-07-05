@@ -171,7 +171,7 @@ class Observer:
             GREEN = '\033[92m'
             RED = '\033[91m'
             RESET = '\033[0m'
-        except:
+        except Exception:
             BLUE = GREEN = RED = RESET = ''
         
         symbol = {
