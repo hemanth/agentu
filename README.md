@@ -23,7 +23,7 @@ result = await agent.call("search_products", {"query": "laptop"})
 result = await agent.infer("Find me laptops under $1500")
 ```
 
-`call()` runs a tool. `infer()` lets the LLM pick the tool and fill in the parameters from natural language.
+`call()` runs a tool. `infer()` runs a multi-turn agentic loop — the LLM picks tools, calls them, sees results, and keeps going until the task is done or `max_turns` is hit.
 
 ## Sandboxed tool execution
 
@@ -34,6 +34,8 @@ agent = Agent("assistant").with_sandbox(
     read_tools=[search, get_weather],
     write_tools=[save_file, send_email],
     timeout=10,
+    max_memory_mb=256,     # enforce memory limit per subprocess
+    allow_network=False,   # block outbound network by default
 )
 
 result = await agent.infer("Find the weather and save it to a file")
@@ -43,6 +45,8 @@ result = await agent.infer("Find the weather and save it to a file")
 - `write_tools` get WRITE permission, side effects allowed
 - Every tool runs in a subprocess, not in your agent's process
 - If a tool hangs past `timeout`, subprocess is killed, agent stays alive
+- `max_memory_mb` enforces memory limits via `resource.setrlimit`
+- `allow_network=False` blocks outbound HTTP via proxy env vars
 - Sandbox exit codes, stderr, and timeouts are captured in the observer
 
 ## Code Mode
@@ -80,6 +84,58 @@ result = await agent.infer("Summarize the customer data")
 # If the PII guardrail or ContentFilter trips, it retries up to 2 times with the violation as feedback
 ```
 
+## Hooks
+
+Intercept tool calls before and after execution:
+
+```python
+from agentu import HookResult, HookAction
+
+async def audit_hook(tool_name, params, context):
+    if tool_name == "delete_all":
+        return HookResult(action=HookAction.DENY, reason="Deletes are not allowed")
+    return HookResult(action=HookAction.ALLOW)
+
+agent = Agent("assistant").with_hooks(
+    pre_tool=audit_hook,
+    post_tool=lambda name, params, result: result.upper(),
+    on_stop=lambda response: response,
+)
+```
+
+`pre_tool` returns ALLOW, DENY, or MODIFY. Denials are fed back to the model as context. Multiple hooks chain additively.
+
+## Structured outputs
+
+Return validated Pydantic models instead of raw text:
+
+```python
+from pydantic import BaseModel
+
+class Review(BaseModel):
+    rating: int
+    summary: str
+
+result = await agent.infer("Review this product", output_type=Review)
+review = result["structured"]  # validated Review instance
+```
+
+On validation failure, the error is fed back to the LLM for retry (controlled by `max_corrections` from guardrails).
+
+## Context management
+
+Prevent context overflow in long-running agents:
+
+```python
+agent = Agent("assistant").with_context(
+    max_tokens=100_000,
+    compaction="auto",    # truncate → summarize → keep recent
+    keep_recent=5,
+)
+```
+
+Compaction triggers at 80% budget. Tiered strategy: truncate old tool results → LLM-summarize → drop oldest turns.
+
 ## Rule files
 
 Prepend project-level rules to every LLM call:
@@ -88,7 +144,15 @@ Prepend project-level rules to every LLM call:
 agent = Agent("assistant").with_rules("AGENTS.md")
 ```
 
-The contents of `AGENTS.md` get prepended to the system prompt. Works with declarative config too:
+Or let the agent auto-discover `AGENTS.md` / `CLAUDE.md` from your repo root:
+
+```python
+agent = Agent("assistant", auto_discover_rules=True)
+```
+
+Checks `AGENTS.md` → `.agents/AGENTS.md` → `CLAUDE.md` → `.claude/CLAUDE.md`. First match wins.
+
+Works with declarative config too:
 
 ```yaml
 name: "support-agent"
@@ -111,6 +175,10 @@ agent = Agent("bot").with_tools([
 
 # Explicitly allow DANGEROUS tools
 agent.with_permissions(allow_dangerous=True)
+
+# Permission modes
+agent.with_permissions(mode="plan")         # blocks all WRITE tools
+agent.with_permissions(mode="ask-writes")   # WRITE tools raise for approval
 ```
 
 ## Declarative configuration
@@ -243,9 +311,12 @@ Semantic matching uses an embedding model (local `all-MiniLM-L6-v2` or API-based
 ```python
 agent.remember("Customer prefers email", importance=0.9)
 memories = agent.recall(query="communication preferences")
+
+# Semantic recall — find by meaning, not just keywords
+memories = agent.recall(query="how to reach the customer", semantic=True)
 ```
 
-SQLite-backed, searchable, persistent across sessions.
+SQLite-backed, searchable, persistent across sessions. When `semantic=True`, uses embedding similarity instead of substring matching.
 
 ### Rationale Recording (ADRs)
 
@@ -302,9 +373,14 @@ session = manager.create_session(agent)
 
 await session.send("What's the weather in SF?")
 await session.send("What about tomorrow?")  # knows you mean SF
+
+# Checkpoint and resume
+await session.checkpoint()              # save to SQLite
+session = await manager.resume("sid")   # restore later
+await session.checkpoint(fork=True)     # branch into a new session
 ```
 
-Multi-user isolation, SQLite persistence, session timeout handling.
+Multi-user isolation, SQLite persistence, session timeout handling, checkpoint/resume.
 
 ## Evaluation
 
@@ -324,6 +400,21 @@ print(results.to_json())  # export for CI/CD
 ```
 
 Matching strategies: exact, substring, LLM-as-judge, or custom validators.
+
+### Trajectory evals
+
+```python
+from agentu.eval.trajectory import TrajectoryAssertion
+
+assertion = TrajectoryAssertion(
+    expected_tools=["search", "save_file"],
+    max_tool_calls=5,
+    no_redundant_calls=True,
+)
+
+# Convert an observed trace into an eval case
+eval_case = agent.observer.to_eval_case()
+```
 
 ## Observability
 
@@ -345,9 +436,19 @@ metrics = agent.observer.get_metrics()
 # {"tool_calls": 3, "total_duration_ms": 1240, "errors": 0}
 ```
 
-Events captured: `tool_call`, `tool_blocked`, `self_correction`, `llm_request`, `inference_start`, `inference_end`, `error`, `session_create`, `session_end`.
+Events captured: `tool_call`, `tool_blocked`, `self_correction`, `llm_request`, `inference_start`, `inference_end`, `context_compaction`, `error`, `session_create`, `session_end`.
 
-Sandbox events include `sandbox_exit_code`, `sandbox_stderr`, and `sandbox_timed_out` for post-mortem debugging.
+### OpenTelemetry
+
+```bash
+pip install agentu[otel]
+```
+
+```python
+agent = Agent("assistant").with_otel(service_name="my-app")
+```
+
+Maps to GenAI semantic conventions: `gen_ai.client.operation`, `gen_ai.execute_tool`, `gen_ai.chat`.
 
 ### Dashboard
 
@@ -451,6 +552,13 @@ agent = Agent("lead").with_subagents(".agents/")
 
 result = await agent.delegate("Refactor the auth module")
 # {"result": "...", "review": "APPROVED: ...", "approved": True, "corrections": 0}
+
+# Judge panels — multiple reviewers vote
+result = await agent.delegate("Refactor auth", judges=3)
+# Approved only when majority agrees
+
+# Best-of-N — race N agents, judge picks the winner
+result = await agent.best_of(3, "Write a haiku about code")
 ```
 
 Sub-agents inherit the parent's model, tools, and API config unless overridden.
@@ -496,11 +604,21 @@ A `search_tools` function is auto-added. The agent searches, activates, and call
 Connect to Model Context Protocol servers:
 
 ```python
+# HTTP
 agent = await Agent("bot").with_mcp(["http://localhost:3000"])
+
+# STDIO — spawn a local MCP server as a subprocess
 agent = await Agent("bot").with_mcp([
-    {"url": "https://api.com/mcp", "headers": {"Auth": "Bearer xyz"}}
+    {"type": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}
+])
+
+# Streamable HTTP (v2 stateless core)
+agent = await Agent("bot").with_mcp([
+    {"type": "streamable-http", "url": "https://api.com/mcp", "headers": {"Auth": "Bearer xyz"}}
 ])
 ```
+
+Supports HTTP, SSE, STDIO, and Streamable HTTP transports. Elicitation, OAuth 2.1, and long-running tasks via the extensions module.
 
 ## LLM support
 
@@ -555,6 +673,8 @@ agent.with_sandbox(                       # tool isolation
     read_tools=[search, get_weather],
     write_tools=[save_file, send_email],
     timeout=10,
+    max_memory_mb=256,                    # memory limit
+    allow_network=False,                  # egress control
 )
 
 # Guardrails
@@ -563,18 +683,39 @@ agent.with_guardrails(                    # self-correction
     max_corrections=2,
 )
 
+# Hooks
+agent.with_hooks(                         # pre/post-tool callbacks
+    pre_tool=my_pre_hook,                 # ALLOW/DENY/MODIFY
+    post_tool=my_post_hook,               # transform results
+    on_stop=my_stop_hook,                 # runs when loop ends
+)
+
+# Context management
+agent.with_context(                       # prevents context overflow
+    max_tokens=100_000,
+    compaction="auto",                    # truncate → summarize → keep recent
+)
+
+# Structured outputs
+result = await agent.infer(
+    "Rate this",
+    output_type=MyPydanticModel,          # validated + retry on failure
+)
+
+agent.with_otel(service_name="my-app")    # OpenTelemetry GenAI spans
+
 await agent.call("tool", params)          # direct tool execution
-await agent.infer("natural language")     # LLM-routed execution
+await agent.infer("natural language")     # multi-turn agentic loop
 
 agent.remember(content, importance=0.8)   # store memory
-agent.recall(query)                       # search memory
+agent.recall(query, semantic=True)        # semantic memory search
 
 # Sessions
 manager = SessionManager()
 session = manager.create_session(agent)
 await session.send("message")
-session.get_history(limit=10)
-session.clear_history()
+await session.checkpoint()                # save state
+session = await manager.resume("sid")     # restore state
 
 # Evaluation
 results = await evaluate(agent, test_cases)
