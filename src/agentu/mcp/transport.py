@@ -17,6 +17,7 @@ class TransportType(Enum):
     HTTP = "http"
     SSE = "sse"
     STDIO = "stdio"
+    STREAMABLE_HTTP = "streamable-http"
 
 
 @dataclass
@@ -780,5 +781,13 @@ def create_transport(config: MCPServerConfig) -> MCPTransport:
         return MCPSSETransport(config)
     elif config.transport_type == TransportType.STDIO:
         return MCPSTDIOTransport(config)
+    elif config.transport_type == TransportType.STREAMABLE_HTTP:
+        from .extensions import StreamableHTTPTransport
+        auth_headers = config.auth.headers if config.auth else None
+        return StreamableHTTPTransport(
+            url=config.url,
+            auth_headers=auth_headers,
+            timeout=config.timeout,
+        )
     else:
         raise ValueError(f"Unsupported transport type: {config.transport_type}")

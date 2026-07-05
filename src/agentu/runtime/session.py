@@ -12,6 +12,7 @@ import logging
 
 from .._core.agent import Agent
 from ..memory.memory import Memory, MemoryEntry
+from .checkpoint import CheckpointData, CheckpointStore
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,63 @@ class Session:
         """Explicitly save session state."""
         if self.agent.memory_enabled:
             self.agent.save_memory()
-    
+
+    def checkpoint(
+        self,
+        store: Optional["CheckpointStore"] = None,
+        fork: bool = False,
+    ) -> "CheckpointData":
+        """Serialise current session state to a checkpoint.
+
+        Args:
+            store: ``CheckpointStore`` to persist the snapshot to.
+                If *None*, a default store at ``.checkpoints/checkpoints.db``
+                is used.
+            fork: If *True*, the checkpoint is saved under a **new**
+                session ID (a fork), and the returned data has a fresh
+                ``session_id`` with ``parent_session_id`` pointing back
+                to the original.
+
+        Returns:
+            The persisted ``CheckpointData``.
+        """
+        if store is None:
+            store = CheckpointStore()
+
+        # Gather conversation history from memory
+        history: List[Dict[str, Any]] = []
+        if self.agent.memory and self.agent.memory_enabled:
+            entries = self.agent.recall(
+                memory_type='conversation',
+                limit=1000,
+                include_short_term=True,
+            )
+            history = [e.to_dict() for e in entries]
+
+        session_id = self.session_id
+        parent_id: Optional[str] = None
+        if fork:
+            parent_id = self.session_id
+            session_id = str(uuid.uuid4())
+
+        data = CheckpointData(
+            session_id=session_id,
+            agent_name=self.agent.name,
+            conversation_history=history,
+            metadata=dict(self.metadata),
+            turn_count=self.turn_count,
+            created_at=self.created_at,
+            checkpointed_at=time.time(),
+            parent_session_id=parent_id,
+        )
+        store.save(data)
+        logger.info(
+            "Checkpointed session %s (fork=%s)",
+            data.session_id,
+            fork,
+        )
+        return data
+
     def to_dict(self) -> Dict[str, Any]:
         """Export session metadata (not full state)."""
         return {
@@ -198,6 +255,66 @@ class SessionManager:
             
             session.last_accessed = time.time()
         
+        return session
+
+    def resume(
+        self,
+        session_id: str,
+        agent: Agent,
+        store: Optional[CheckpointStore] = None,
+    ) -> Optional[Session]:
+        """Resume a session from a persisted checkpoint.
+
+        Loads the most recent checkpoint for *session_id*, creates a
+        fresh ``Session`` wrapping the provided *agent*, and replays
+        the saved conversation history into the agent's memory.
+
+        Args:
+            session_id: The session to resume.
+            agent: An ``Agent`` instance to attach to the resumed
+                session (should match the original agent's tools/model).
+            store: ``CheckpointStore`` to read from.  If *None*, a
+                default store at ``.checkpoints/checkpoints.db`` is used.
+
+        Returns:
+            The resumed ``Session``, or ``None`` if no checkpoint was
+            found for *session_id*.
+        """
+        if store is None:
+            store = CheckpointStore()
+
+        data = store.load(session_id)
+        if data is None:
+            logger.warning("No checkpoint found for session %s", session_id)
+            return None
+
+        # If the session is already live, return it
+        if session_id in self.sessions:
+            logger.info("Session %s already active, returning it", session_id)
+            return self.sessions[session_id]
+
+        session = Session(
+            session_id=data.session_id,
+            agent=agent,
+            created_at=data.created_at,
+            metadata=data.metadata,
+        )
+        session.turn_count = data.turn_count
+
+        # Replay conversation history into agent memory
+        for entry_dict in data.conversation_history:
+            if agent.memory:
+                from ..memory.memory import MemoryEntry
+                entry = MemoryEntry.from_dict(entry_dict)
+                agent.memory.short_term.entries.append(entry)
+
+        self.sessions[session_id] = session
+        logger.info(
+            "Resumed session %s (%d turns, %d history entries)",
+            session_id,
+            data.turn_count,
+            len(data.conversation_history),
+        )
         return session
     
     def delete_session(self, session_id: str) -> bool:

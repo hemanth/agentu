@@ -27,7 +27,7 @@ from .workflow.workflow import Step, SequentialStep, ParallelStep, WorkflowCheck
 from .workflow.schedule import Scheduler, ScheduleConfig, ScheduleStore, Finding, CronParser
 from .workflow.subagent import SubAgentConfig, load_subagent_configs, run_maker_checker
 from .workflow.worktree import WorktreeManager
-from ._core.structured import pydantic_to_json_schema, build_response_format, parse_and_validate
+from ._core.structured import pydantic_to_json_schema, build_response_format, parse_and_validate, format_validation_error, StructuredOutputError
 from ._core.multimodal import build_content_parts, resolve_image, detect_mime_type
 from .middleware import guardrails as guardrails
 from .middleware import observe as observe
@@ -138,6 +138,8 @@ __all__ = [
     "pydantic_to_json_schema",
     "build_response_format",
     "parse_and_validate",
+    "format_validation_error",
+    "StructuredOutputError",
     # Multi-modal
     "build_content_parts",
     "resolve_image",

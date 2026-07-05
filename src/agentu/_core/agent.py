@@ -6,10 +6,16 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import logging
 
-from .structured import build_response_format, parse_and_validate
+from .structured import (
+    build_response_format,
+    parse_and_validate,
+    format_validation_error,
+    StructuredOutputError,
+)
 from .multimodal import build_content_parts
 
 from .tools import Tool, ToolPermission
+from .safety import check_lethal_trifecta, spotlight_untrusted
 from .hooks import (
     HookAction, HookResult, HookSet, PermissionApprovalRequired,
     _call_maybe_async, PreToolHook, PostToolHook, OnStopHook,
@@ -418,6 +424,12 @@ class Agent:
             for tool in defer:
                 self._add_tool_internal(tool, deferred=True)
             self._ensure_search_tool()
+
+        # Check for lethal trifecta across all registered tools
+        all_tools = self.tools + self.deferred_tools
+        report = check_lethal_trifecta(all_tools)
+        if report.has_trifecta:
+            self._trifecta_report = report
 
         return self
 
@@ -1601,6 +1613,114 @@ User request: {user_input}"""
 
         return full_response
 
+    async def _structured_output_with_retries(
+        self,
+        user_input: str,
+        output_type: Type,
+        images: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Call the LLM and validate output against a Pydantic model, retrying on failure.
+
+        Uses the same ``max_corrections`` limit configured via
+        :meth:`with_guardrails` (default 0 = no retries).
+
+        On each validation failure the error is formatted into a clear
+        correction prompt and fed back to the LLM.
+
+        Args:
+            user_input: Original user prompt.
+            output_type: Pydantic BaseModel class to validate against.
+            images: Optional image sources.
+
+        Returns:
+            Dict with ``result`` (raw JSON), ``structured`` (validated
+            instance), and ``attempts`` (number of LLM calls made).
+
+        Raises:
+            StructuredOutputError: If validation still fails after all
+                retry attempts.
+        """
+        max_retries = self._max_corrections  # reuse guardrail setting
+        last_error: Optional[Exception] = None
+        raw = ""
+
+        for attempt in range(max_retries + 1):
+            if attempt == 0:
+                # First attempt: normal call with schema hint
+                raw = await self._call_llm(
+                    user_input, output_schema=output_type, images=images,
+                )
+            else:
+                # Retry: feed validation error back to LLM
+                assert last_error is not None
+                error_feedback = format_validation_error(last_error, output_type)
+                correction_prompt = (
+                    f"Your previous response was invalid:\n{error_feedback}\n\n"
+                    f"Original request: {user_input}\n\n"
+                    f"Regenerate a valid JSON response."
+                )
+                self.observer.record(EventType.SELF_CORRECTION, {
+                    "attempt": attempt,
+                    "max_attempts": max_retries,
+                    "error": str(last_error)[:500],
+                    "type": "structured_output",
+                })
+                logger.info(
+                    f"Structured output retry (attempt {attempt}/{max_retries}): "
+                    f"{str(last_error)[:200]}"
+                )
+                raw = await self._call_llm(
+                    correction_prompt, output_schema=output_type, images=images,
+                )
+
+            try:
+                validated = parse_and_validate(raw, output_type)
+            except (ValueError, Exception) as exc:
+                last_error = exc
+                if attempt == max_retries:
+                    # Exhausted retries
+                    raise StructuredOutputError(
+                        f"Structured output validation failed after "
+                        f"{attempt + 1} attempt(s): {exc}",
+                        raw_output=raw,
+                        model=output_type,
+                        attempts=attempt + 1,
+                        last_error=str(exc),
+                    ) from exc
+                continue
+
+            # Success
+            result: Dict[str, Any] = {
+                "result": raw,
+                "structured": validated,
+                "attempts": attempt + 1,
+            }
+
+            self.conversation_history.append({
+                "user_input": user_input,
+                "response": result,
+                "turns": attempt + 1,
+            })
+            self.observer.record(
+                EventType.INFERENCE_END,
+                {
+                    "query": user_input,
+                    "turns": attempt + 1,
+                    "structured": True,
+                    "output_type": getattr(output_type, "__name__", str(output_type)),
+                },
+            )
+            return result
+
+        # Should be unreachable, but satisfy the type checker
+        raise StructuredOutputError(  # pragma: no cover
+            "Structured output validation failed",
+            raw_output=raw,
+            model=output_type,
+            attempts=max_retries + 1,
+            last_error=str(last_error),
+        )
+
     async def _stream_llm(
         self,
         prompt: str,
@@ -1918,6 +2038,10 @@ Example response for calculator:
                                 tool_name, parameters, result,
                             )
 
+                        # 7. Spotlight untrusted content
+                        if tool.ingests_untrusted and isinstance(result, str):
+                            result = spotlight_untrusted(result)
+
                         return result
                 except Exception as e:
                     logger.error(f"Error calling tool {tool_name}: {str(e)}")
@@ -2075,6 +2199,7 @@ Example response for calculator:
         self,
         user_input: str,
         output_schema: Optional[Type] = None,
+        output_type: Optional[Type] = None,
         images: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Infer tool and parameters from natural language input.
@@ -2092,15 +2217,36 @@ Example response for calculator:
         When output_schema is set and no tools are registered, runs a
         direct structured LLM call instead of the agentic tool loop.
 
+        When output_type is set, the LLM output is validated against the
+        given Pydantic BaseModel class and retried on validation failure
+        (up to max_corrections times). Returns a validated Pydantic
+        instance in the 'structured' key. Mutually exclusive with
+        output_schema.
+
         Args:
             user_input: Natural language query
-            output_schema: Optional Pydantic BaseModel class for structured output
+            output_schema: Optional Pydantic BaseModel class or JSON schema dict
+                for structured output (raw JSON, no retry)
+            output_type: Optional Pydantic BaseModel class for validated
+                structured output with auto-retry on validation failure
             images: Optional list of image sources (URL, data URI, or local file path)
 
         Returns:
             Dict with tool_used, parameters, reasoning, and result.
-            When output_schema is set, includes 'structured' key with validated instance.
+            When output_schema or output_type is set, includes 'structured'
+            key with validated instance.
+
+        Raises:
+            ValueError: If both output_schema and output_type are provided.
+            StructuredOutputError: If output_type validation fails after all
+                retry attempts.
         """
+        if output_schema is not None and output_type is not None:
+            raise ValueError(
+                "output_schema and output_type are mutually exclusive. "
+                "Use output_type for Pydantic-validated structured output "
+                "with auto-retry, or output_schema for raw JSON schema."
+            )
         # Track inference start
         self.observer.record(EventType.INFERENCE_START, {
             "query": user_input, "codemode": self.codemode,
@@ -2122,7 +2268,7 @@ Example response for calculator:
                 )
 
         try:
-            return await self._infer_inner(user_input, output_schema, images)
+            return await self._infer_inner(user_input, output_schema, output_type, images)
         finally:
             if worktree_manager:
                 await worktree_manager.remove()
@@ -2131,6 +2277,7 @@ Example response for calculator:
         self,
         user_input: str,
         output_schema: Optional[Type] = None,
+        output_type: Optional[Type] = None,
         images: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Inner inference logic, separated for worktree wrapping."""
@@ -2139,6 +2286,12 @@ Example response for calculator:
         if self._pending_mcp_config:
             await self.with_mcp([self._pending_mcp_config])
             self._pending_mcp_config = None
+
+        # output_type fast path: validated Pydantic output with retry
+        if output_type is not None and not self.tools:
+            return await self._structured_output_with_retries(
+                user_input, output_type, images=images,
+            )
 
         # Structured output fast path: direct LLM call with schema
         if output_schema is not None and not self.tools:
@@ -2578,6 +2731,47 @@ Example response for calculator:
 
     # ── Loop Engineering: Sub-agents ────────────────────────────────
 
+    def with_otel(
+        self,
+        endpoint: Optional[str] = None,
+        service_name: Optional[str] = None,
+    ) -> 'Agent':
+        """Enable OpenTelemetry GenAI span export for this agent.
+
+        Requires the ``[otel]`` extra to be installed::
+
+            pip install agentu[otel]
+
+        When the ``opentelemetry`` SDK is not available the method is
+        a silent no-op — no errors are raised.
+
+        Args:
+            endpoint: OTLP HTTP exporter endpoint (default: env var or
+                ``http://localhost:4318``).
+            service_name: OTel resource ``service.name`` attribute
+                (default: ``"agentu"``).
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("bot").with_otel(
+            ...     endpoint="http://localhost:4318",
+            ...     service_name="my-agent",
+            ... )
+        """
+        from ..middleware.otel import OTelExporter
+
+        exporter = OTelExporter(
+            service_name=service_name or "agentu",
+            endpoint=endpoint,
+            model=self.model,
+            observer=self.observer,
+        )
+        exporter.attach(self.observer)
+        self._otel_exporter = exporter
+        return self
+
     def with_subagents(
         self,
         agents: Union[str, List[Dict[str, Any]]],
@@ -2612,15 +2806,22 @@ Example response for calculator:
         self,
         task: str,
         max_corrections: int = 1,
+        judges: int = 1,
     ) -> Dict[str, Any]:
         """Delegate a task to sub-agents using maker-checker pattern.
 
         The maker sub-agent executes the task, then the checker reviews
         the output. If rejected, the maker gets correction attempts.
 
+        When ``judges > 1``, multiple checker instances vote on the
+        maker output using a panel consensus model.  The output is
+        approved only when a majority of judges approve.
+
         Args:
             task: The task to delegate
             max_corrections: Max correction attempts on rejection (default: 1)
+            judges: Number of checker instances to use as a judge panel
+                (default: 1 — single checker, original behaviour).
 
         Returns:
             Dict with: result, review, approved, corrections, maker, checker
@@ -2629,8 +2830,10 @@ Example response for calculator:
             >>> result = await agent.delegate("Refactor the auth module")
             >>> if result["approved"]:
             ...     print("Changes approved by reviewer")
+            >>> # Use a panel of 3 judges for higher confidence
+            >>> result = await agent.delegate("Refactor auth", judges=3)
         """
-        from ..workflow.subagent import _build_subagent, run_maker_checker
+        from ..workflow.subagent import _build_subagent, run_maker_checker, run_judge_panel
 
         if not hasattr(self, '_subagent_configs') or not self._subagent_configs:
             raise RuntimeError("No sub-agents configured. Use with_subagents() first.")
@@ -2659,6 +2862,16 @@ Example response for calculator:
             else:
                 makers.append(agent)
 
+        if judges > 1 and checkers:
+            return await run_judge_panel(
+                task=task,
+                makers=makers,
+                checkers=checkers,
+                num_judges=judges,
+                max_corrections=max_corrections,
+                parent_observer=self.observer,
+            )
+
         return await run_maker_checker(
             task=task,
             makers=makers,
@@ -2666,6 +2879,42 @@ Example response for calculator:
             max_corrections=max_corrections,
             parent_observer=self.observer,
         )
+
+    async def best_of(
+        self,
+        n: int,
+        task: str,
+        judge: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Run N instances of this agent in parallel and pick the best.
+
+        Each instance runs the same task independently (using worktree
+        isolation when configured).  A judge agent then evaluates all
+        results and selects the best one.
+
+        Args:
+            n: Number of parallel instances to run.
+            task: The task to run.
+            judge: Optional Agent instance to judge results.  If
+                ``None``, the first result is returned (no judging).
+
+        Returns:
+            Dict with ``result``, ``all_results``, ``chosen_index``,
+            and ``judge_reasoning``.
+
+        Example:
+            >>> result = await agent.best_of(3, "Write a haiku about code")
+        """
+        from ..workflow.subagent import _build_subagent, run_best_of
+
+        return await run_best_of(
+            agent=self,
+            n=n,
+            task=task,
+            judge=judge,
+            parent_observer=self.observer,
+        )
+
 
     # ── Context Management ──────────────────────────────────────────
 

@@ -258,6 +258,30 @@ class Observer:
         """
         return [e.to_dict() for e in self.events[-limit:]]
     
+    def to_eval_case(
+        self,
+        expected_output: Optional[str] = None,
+        query: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Convert recorded trace into an eval case for regression testing.
+
+        The returned dict is compatible with :func:`agentu.eval.evaluate`.
+
+        Args:
+            expected_output: Expected output string.
+            query: The original query.  Extracted from events if ``None``.
+
+        Returns:
+            Eval case dict with ``ask`` and ``expect`` keys.
+
+        Example::
+
+            case = observer.to_eval_case(expected_output="42")
+            results = await evaluate(agent, [case])
+        """
+        from ..eval.trajectory import to_eval_case
+        return to_eval_case(self, expected_output=expected_output, query=query)
+
     def clear(self):
         """Clear all events and reset metrics."""
         self.events.clear()

@@ -5,12 +5,13 @@ Tool functions run in isolation with resource limits.
 """
 
 import json
+import os
 import platform
 import asyncio
 import logging
 import tempfile
 import textwrap
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,17 @@ class SandboxLimits:
         timeout_seconds: Max execution time (default: 30)
         max_memory_mb: Max memory in MB (default: 256, None=unlimited)
         max_output_bytes: Max stdout/stderr bytes to capture (default: 1MB)
+        allow_network: If False, block outbound HTTP(S) via proxy env vars
+            (default: True for backwards compatibility)
+        network_allowlist: When allow_network is False, list of domains/IPs
+            that bypass the blocking proxy (set via NO_PROXY). Ignored when
+            allow_network is True.
     """
     timeout_seconds: float = 30.0
     max_memory_mb: Optional[int] = 256
     max_output_bytes: int = 1_048_576  # 1MB
+    allow_network: bool = True
+    network_allowlist: Optional[List[str]] = None
 
 
 @dataclass
@@ -115,12 +123,16 @@ class SubprocessSandbox:
                 )
                 exec_code = preamble + code
 
+            # Build subprocess environment with optional egress controls
+            env = self._build_env(limits)
+
             process = await asyncio.create_subprocess_exec(
                 self.python_path, "-c", exec_code,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 # Prevent the subprocess from inheriting signals
                 start_new_session=True,
+                env=env,
             )
             
             try:
@@ -153,6 +165,47 @@ class SubprocessSandbox:
                 error=f"Sandbox error: {str(e)}",
                 exit_code=-1,
             )
+
+
+    @staticmethod
+    def _build_env(limits: SandboxLimits) -> Optional[Dict[str, str]]:
+        """Build subprocess environment dict with optional egress controls.
+
+        When ``limits.allow_network`` is *True* (the default), no
+        modifications are made and ``None`` is returned so the subprocess
+        inherits the parent environment as-is.
+
+        When ``limits.allow_network`` is *False*, the returned env dict
+        sets ``HTTP_PROXY`` / ``HTTPS_PROXY`` to a dummy address so that
+        well-behaved HTTP clients will fail rather than reaching the
+        network.  If ``limits.network_allowlist`` is provided, those
+        domains are placed in ``NO_PROXY`` so they still work.
+
+        Returns:
+            Modified environment dict, or ``None`` to inherit as-is.
+        """
+        if limits.allow_network:
+            return None  # inherit parent env unchanged
+
+        env = os.environ.copy()
+        blocked_proxy = "http://blocked"
+        env["HTTP_PROXY"] = blocked_proxy
+        env["HTTPS_PROXY"] = blocked_proxy
+        env["http_proxy"] = blocked_proxy
+        env["https_proxy"] = blocked_proxy
+
+        if limits.network_allowlist:
+            no_proxy = ",".join(limits.network_allowlist)
+        else:
+            no_proxy = ""
+        env["NO_PROXY"] = no_proxy
+        env["no_proxy"] = no_proxy
+
+        logger.info(
+            "Sandbox egress blocked (NO_PROXY=%s)",
+            no_proxy or "<none>",
+        )
+        return env
 
 
 class InProcessSandbox:
