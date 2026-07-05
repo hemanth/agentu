@@ -708,7 +708,7 @@ agent.with_notifier(["slack://bot-token"])       # notifications
 agent.with_permissions(allow_dangerous=True)     # permission control
 await agent.with_mcp([url])              # MCP servers
 agent.with_backend("redis://...")         # Redis storage backend
-agent.with_vectors("./vectors")           # LanceDB for semantic search
+agent.with_vectors("./vectors")           # LanceDB for remember() + recall(semantic=True)
 
 # Loop Engineering
 agent.with_schedule(every=30, prompt="...")       # interval schedule
