@@ -25,6 +25,8 @@ class MemoryMixin:
         """Resolve vector backend, lazily creating from DSN if needed.
 
         Returns the backend or None if not configured.
+        LanceDBBackend.create() is synchronous, so this works in any
+        context (sync or async).
         """
         # Direct backend (set via with_vectors(backend_obj))
         backend = getattr(self, '_vector_backend', None)
@@ -34,16 +36,10 @@ class MemoryMixin:
         dsn = getattr(self, '_vector_dsn', None)
         if dsn is not None:
             try:
-                # get_vector_backend is async; try to run sync
-                import asyncio
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-                if loop and loop.is_running():
-                    # Can't create synchronously inside event loop
-                    return None
-                backend = asyncio.run(self.get_vector_backend())
+                from ..storage import LanceDBBackend
+                backend = LanceDBBackend.create(dsn)
+                # Cache so we don't re-create on every call
+                self._vector_backend = backend
                 return backend
             except Exception:
                 logger.debug("Failed to lazily create vector backend", exc_info=True)
@@ -81,6 +77,11 @@ class MemoryMixin:
             logger.debug("No embedding provider for vector backend storage")
             return
 
+        # Resolve backend once (already cached by _get_vector_backend_sync)
+        backend = self._get_vector_backend_sync()
+        if backend is None:
+            return
+
         async def _store():
             try:
                 embedding = await embedding_provider.embed(content)
@@ -88,7 +89,7 @@ class MemoryMixin:
                 meta['memory_type'] = memory_type
                 meta['content'] = content
                 key = f"mem:{getattr(entry, 'id', id(entry))}"
-                await self._get_vector_backend_sync().store(key, embedding, meta)
+                await backend.store(key, embedding, meta)
             except Exception:
                 logger.debug("Vector backend store failed", exc_info=True)
 
@@ -143,9 +144,14 @@ class MemoryMixin:
         if embedding_provider is None:
             return []
 
+        # Resolve backend once (already cached)
+        backend = self._get_vector_backend_sync()
+        if backend is None:
+            return []
+
         async def _search():
             query_embedding = await embedding_provider.embed(query)
-            results = await self._get_vector_backend_sync().search(
+            results = await backend.search(
                 query_embedding, limit=limit
             )
             return results

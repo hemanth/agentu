@@ -101,9 +101,10 @@ from .agent_sandbox import SandboxMixin
 from .agent_hooks import HooksMixin
 from .agent_context import ContextMixin
 from .agent_workflow import WorkflowMixin
+from .agent_storage import StorageMixin
 
 
-class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin):
+class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, StorageMixin):
     def __init__(self, name: str, model: Optional[str] = None, temperature: float = 0.7,
                  mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
                  enable_memory: bool = True, memory_path: Optional[str] = None,
@@ -244,35 +245,7 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin):
         self._vector_dsn: Optional[str] = None
         self._vector_dimension: int = 384
 
-    async def get_storage_backend(self):
-        """Get or lazily create the key-value storage backend.
 
-        Returns the configured StorageBackend. If with_backend() was called
-        with a Redis URL, the backend is created on first access.
-        Returns None if no backend is configured (uses component defaults).
-        """
-        if self._storage_backend is not None:
-            return self._storage_backend
-        if self._backend_url:
-            from ..storage import RedisStorageBackend
-            self._storage_backend = await RedisStorageBackend.create(self._backend_url)
-            return self._storage_backend
-        return None
-
-    async def get_vector_backend(self):
-        """Get or lazily create the vector storage backend.
-
-        Returns the configured VectorBackend. If with_vectors() was called
-        with a path/URI, a LanceDBBackend is created on first access.
-        Returns None if no backend is configured (uses in-memory vectors).
-        """
-        if self._vector_backend is not None:
-            return self._vector_backend
-        if self._vector_dsn:
-            from ..storage import LanceDBBackend
-            self._vector_backend = LanceDBBackend.create(self._vector_dsn)
-            return self._vector_backend
-        return None
 
     @classmethod
     async def from_config(cls, path: str) -> 'Agent':
@@ -2356,61 +2329,4 @@ Example response for calculator:
         )
         exporter.attach(self.observer)
         self._otel_exporter = exporter
-        return self
-
-    def with_backend(
-        self,
-        backend: Union[str, Any],
-    ) -> 'Agent':
-        """Set the key-value storage backend for sessions, checkpoints, and memory.
-
-        Args:
-            backend: Either a Redis URL string (``redis://host:6379/0``)
-                or a :class:`StorageBackend` instance.
-
-        Returns:
-            Self for method chaining
-
-        Example:
-            >>> agent = Agent("bot").with_backend("redis://localhost:6379")
-            >>> # or with a custom backend
-            >>> agent = Agent("bot").with_backend(MyCustomBackend())
-        """
-        if isinstance(backend, str):
-            # Treat as Redis URL — lazy-create on first use
-            self._backend_url = backend
-            self._storage_backend = None  # Created async on first access
-        else:
-            self._storage_backend = backend
-            self._backend_url = None
-        return self
-
-    def with_vectors(
-        self,
-        backend: Union[str, Any],
-        dimension: int = 384,
-    ) -> 'Agent':
-        """Set the vector storage backend for semantic search.
-
-        Args:
-            backend: Either a PostgreSQL DSN (``postgresql://host/db``)
-                or a :class:`VectorBackend` instance.
-            dimension: Embedding dimension (default: 384 for MiniLM).
-
-        Returns:
-            Self for method chaining
-
-        Example:
-            >>> agent = Agent("bot").with_vectors("postgresql://localhost/agentu")
-            >>> # or with a custom backend
-            >>> from agentu.storage import InMemoryVectorBackend
-            >>> agent = Agent("bot").with_vectors(InMemoryVectorBackend())
-        """
-        if isinstance(backend, str):
-            self._vector_dsn = backend
-            self._vector_dimension = dimension
-            self._vector_backend = None  # Created async on first access
-        else:
-            self._vector_backend = backend
-            self._vector_dsn = None
         return self

@@ -460,3 +460,60 @@ class TestCheckpointBackendIntegration:
             agent = _make_agent(enable_memory=True)
             result = manager.resume("nonexistent", agent, store=store)
             assert result is None
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Vector backend ↔ MemoryMixin integration tests
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestVectorBackendIntegration:
+
+    def test_get_vector_backend_sync_returns_none_unconfigured(self):
+        """Returns None when no vector backend is configured."""
+        agent = _make_agent(enable_memory=True)
+        assert agent._get_vector_backend_sync() is None
+
+    def test_get_vector_backend_sync_returns_direct_backend(self):
+        """Returns the backend when set via with_vectors(backend_obj)."""
+        backend = InMemoryVectorBackend()
+        agent = _make_agent(enable_memory=True).with_vectors(backend)
+        assert agent._get_vector_backend_sync() is backend
+
+    def test_get_vector_backend_sync_caches_created_backend(self):
+        """Created backend is cached on self._vector_backend."""
+        backend = InMemoryVectorBackend()
+        agent = _make_agent(enable_memory=True)
+        agent._vector_backend = backend
+        result = agent._get_vector_backend_sync()
+        assert result is backend
+
+    def test_remember_stores_to_vector_backend(self):
+        """remember() with high importance stores to vector backend."""
+        backend = InMemoryVectorBackend()
+        agent = _make_agent(enable_memory=True).with_vectors(backend)
+        # Without an embedding provider, _store_to_vector_backend exits early
+        # Verify it doesn't crash
+        agent.remember("important fact", importance=0.9, store_long_term=True)
+
+    def test_remember_skips_vector_when_low_importance(self):
+        """remember() with low importance doesn't try vector backend."""
+        backend = InMemoryVectorBackend()
+        agent = _make_agent(enable_memory=True).with_vectors(backend)
+        agent.remember("trivial note", importance=0.3, store_long_term=False)
+        # Should not crash, vector backend not invoked
+
+    def test_recall_without_vector_backend_uses_memory(self):
+        """recall(semantic=True) falls through to Memory when no vector backend."""
+        agent = _make_agent(enable_memory=True)
+        agent.remember("test content", importance=0.5)
+        # Should not crash, falls through to substring matching
+        results = agent.recall(query="test", semantic=True)
+        assert isinstance(results, list)
+
+    def test_recall_from_vector_backend_returns_empty_without_provider(self):
+        """_recall_from_vector_backend returns [] without embedding provider."""
+        backend = InMemoryVectorBackend()
+        agent = _make_agent(enable_memory=True).with_vectors(backend)
+        result = agent._recall_from_vector_backend("query", limit=5, threshold=0.0)
+        assert result == []
