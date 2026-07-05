@@ -10,6 +10,10 @@ from .structured import build_response_format, parse_and_validate
 from .multimodal import build_content_parts
 
 from .tools import Tool, ToolPermission
+from .hooks import (
+    HookAction, HookResult, HookSet, PermissionApprovalRequired,
+    _call_maybe_async, PreToolHook, PostToolHook, OnStopHook,
+)
 from ..mcp.config import load_mcp_servers
 from ..mcp.tool import MCPToolManager
 from ..memory.memory import Memory
@@ -173,6 +177,13 @@ class Agent:
         self._middleware_chain: Optional[MiddlewareChain] = None
         self._max_corrections: int = 0  # disabled until with_guardrails sets it
         self._allow_dangerous: bool = False
+
+        # Hooks (pre_tool, post_tool, on_stop)
+        self._hooks: Optional[HookSet] = None
+
+        # Permission mode: 'auto' (default), 'plan', 'ask-writes'
+        self._permission_mode: str = "auto"
+        self._can_use_tool: Optional[Callable] = None
 
         # Sandbox for tool isolation
         self._sandbox = None
@@ -467,13 +478,30 @@ class Agent:
         logger.info(f"Loaded {len(rules_content)} chars of rules from {path}")
         return self
 
-    def with_permissions(self, allow_dangerous: bool = False) -> 'Agent':
+    def with_permissions(
+        self,
+        mode: str = "auto",
+        can_use_tool: Optional[Callable] = None,
+        allow_dangerous: bool = False,
+    ) -> 'Agent':
         """Configure tool permission policy.
 
-        By default, tools marked as ToolPermission.DANGEROUS are blocked.
-        Use this to explicitly enable them.
+        Permission modes:
+            - ``"auto"``: All tools execute freely (current default behaviour).
+            - ``"plan"``: WRITE and DANGEROUS tools are blocked. The agent can
+              only call READONLY tools.
+            - ``"ask-writes"``: WRITE tools raise
+              :class:`PermissionApprovalRequired` so the caller can prompt
+              the user before allowing execution.
+
+        The ``plan`` mode is implemented as a built-in *pre_tool* hook that
+        denies WRITE tools, so it composes naturally with custom hooks.
 
         Args:
+            mode: Permission mode — ``"auto"``, ``"plan"``, or ``"ask-writes"``.
+            can_use_tool: Optional async/sync callback
+                ``(tool_name, params, context) -> 'allow' | 'deny' | 'ask'``.
+                Overrides the default mode logic for individual calls.
             allow_dangerous: If True, allow DANGEROUS tools to execute.
 
         Returns:
@@ -481,8 +509,81 @@ class Agent:
 
         Example:
             >>> agent = Agent("bot").with_permissions(allow_dangerous=True)
+            >>> agent = Agent("bot").with_permissions(mode="plan")
+            >>> agent = Agent("bot").with_permissions(
+            ...     mode="ask-writes",
+            ...     can_use_tool=lambda name, params, ctx: "allow",
+            ... )
         """
+        if mode not in ("auto", "plan", "ask-writes"):
+            raise ValueError(f"Invalid permission mode: {mode!r}. Use 'auto', 'plan', or 'ask-writes'.")
+        self._permission_mode = mode
+        self._can_use_tool = can_use_tool
         self._allow_dangerous = allow_dangerous
+
+        # 'plan' mode installs a pre_tool hook that denies WRITE tools
+        if mode == "plan":
+            def _plan_mode_hook(tool_name: str, parameters: Dict[str, Any], context: Dict[str, Any]) -> HookResult:
+                tool_obj = context.get("tool")
+                if tool_obj and tool_obj.permission in (ToolPermission.WRITE, ToolPermission.DANGEROUS):
+                    return HookResult(
+                        action=HookAction.DENY,
+                        reason=f"Tool '{tool_name}' is blocked in plan mode (permission={tool_obj.permission.value}). "
+                               f"Only READONLY tools are allowed.",
+                    )
+                return HookResult(action=HookAction.ALLOW)
+
+            self.with_hooks(pre_tool=_plan_mode_hook)
+
+        return self
+
+    def with_hooks(
+        self,
+        pre_tool: Optional[Union[PreToolHook, List[PreToolHook]]] = None,
+        post_tool: Optional[Union[PostToolHook, List[PostToolHook]]] = None,
+        on_stop: Optional[Union[OnStopHook, List[OnStopHook]]] = None,
+    ) -> 'Agent':
+        """Register lifecycle hooks on this agent.
+
+        Hooks can be sync or async callables.  Multiple calls to
+        ``with_hooks`` are additive — hooks accumulate.
+
+        Args:
+            pre_tool: Called **before** each tool execution.
+                Signature: ``(tool_name, parameters, context) -> HookResult``
+                *context* contains ``{"tool": <Tool object>}``.
+                Return ``HookResult(action=HookAction.DENY, reason=…)`` to
+                block the call, or ``HookResult(action=HookAction.MODIFY,
+                modified_params=…)`` to rewrite parameters.
+            post_tool: Called **after** each tool execution.
+                Signature: ``(tool_name, parameters, result) -> result``
+                The returned value replaces the tool result.
+            on_stop: Called when the agent loop finishes.
+                Signature: ``(final_response) -> final_response``
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> def audit(tool_name, params, ctx):
+            ...     print(f"Calling {tool_name}")
+            ...     return HookResult()  # allow
+            >>> agent = Agent("bot").with_hooks(pre_tool=audit)
+        """
+        if self._hooks is None:
+            self._hooks = HookSet()
+
+        # Normalise single callable into a list
+        if pre_tool is not None:
+            hooks = pre_tool if isinstance(pre_tool, list) else [pre_tool]
+            self._hooks.pre_tool_hooks.extend(hooks)
+        if post_tool is not None:
+            hooks = post_tool if isinstance(post_tool, list) else [post_tool]
+            self._hooks.post_tool_hooks.extend(hooks)
+        if on_stop is not None:
+            hooks = on_stop if isinstance(on_stop, list) else [on_stop]
+            self._hooks.on_stop_hooks.extend(hooks)
+
         return self
 
     def with_sandbox(
@@ -1590,6 +1691,15 @@ Example response for calculator:
         If a sandbox is enabled via with_sandbox(), tools execute in subprocess
         isolation. Otherwise they run in-process.
 
+        Hooks and permission modes are applied in this order:
+
+        1. DANGEROUS permission check (always)
+        2. ``can_use_tool`` callback (if set)
+        3. ``ask-writes`` mode check
+        4. Pre-tool hooks
+        5. Tool execution
+        6. Post-tool hooks
+
         Args:
             tool_name: Name of the tool to call
             parameters: Parameters to pass to the tool
@@ -1599,10 +1709,11 @@ Example response for calculator:
 
         Raises:
             PermissionError: If tool is DANGEROUS and not explicitly allowed
+            PermissionApprovalRequired: In 'ask-writes' mode for WRITE tools
         """
         for tool in self.tools:
             if tool.name == tool_name:
-                # Check tool permissions
+                # 1. Check DANGEROUS permission (unchanged default behaviour)
                 if tool.permission == ToolPermission.DANGEROUS and not self._allow_dangerous:
                     self.observer.record(EventType.TOOL_BLOCKED, {
                         "tool_name": tool_name,
@@ -1613,6 +1724,57 @@ Example response for calculator:
                         f"Tool '{tool_name}' is marked as DANGEROUS and blocked. "
                         f"Use agent.with_permissions(allow_dangerous=True) to enable."
                     )
+
+                # 2. can_use_tool callback (custom per-call decision)
+                if self._can_use_tool is not None:
+                    decision = await _call_maybe_async(
+                        self._can_use_tool, tool_name, parameters,
+                        {"tool": tool},
+                    )
+                    if decision == "deny":
+                        self.observer.record(EventType.TOOL_BLOCKED, {
+                            "tool_name": tool_name,
+                            "reason": "can_use_tool_denied",
+                        })
+                        raise PermissionError(
+                            f"Tool '{tool_name}' denied by can_use_tool callback."
+                        )
+                    if decision == "ask":
+                        raise PermissionApprovalRequired(
+                            tool_name=tool_name,
+                            parameters=parameters,
+                            reason=f"Tool '{tool_name}' requires approval (can_use_tool returned 'ask').",
+                        )
+
+                # 3. ask-writes mode: WRITE tools need approval
+                if (
+                    self._permission_mode == "ask-writes"
+                    and tool.permission == ToolPermission.WRITE
+                    and self._can_use_tool is None  # skip if callback already handled
+                ):
+                    raise PermissionApprovalRequired(
+                        tool_name=tool_name,
+                        parameters=parameters,
+                        reason=f"Tool '{tool_name}' is a WRITE tool and requires approval in ask-writes mode.",
+                    )
+
+                # 4. Pre-tool hooks
+                if self._hooks and self._hooks.pre_tool_hooks:
+                    hook_result = await self._hooks.run_pre_tool(
+                        tool_name, parameters, {"tool": tool},
+                    )
+                    if hook_result.action == HookAction.DENY:
+                        self.observer.record(EventType.TOOL_BLOCKED, {
+                            "tool_name": tool_name,
+                            "reason": f"pre_tool_hook_denied: {hook_result.reason}",
+                        })
+                        # Return denial reason as a string so the model can
+                        # see it and adjust, rather than raising an exception
+                        # that would abort the entire agent loop.
+                        return f"DENIED: {hook_result.reason}"
+                    if hook_result.action == HookAction.MODIFY:
+                        if hook_result.modified_params is not None:
+                            parameters = hook_result.modified_params
 
                 try:
                     with self.observer.trace(
@@ -1626,12 +1788,19 @@ Example response for calculator:
                     ):
                         # Sandboxed execution path
                         if self._sandbox is not None:
-                            return await self._call_sandboxed(tool, parameters)
+                            result = await self._call_sandboxed(tool, parameters)
+                        else:
+                            # In-process execution (default)
+                            result = tool.function(**parameters)
+                            if asyncio.iscoroutine(result):
+                                result = await result
 
-                        # In-process execution (default)
-                        result = tool.function(**parameters)
-                        if asyncio.iscoroutine(result):
-                            result = await result
+                        # 6. Post-tool hooks
+                        if self._hooks and self._hooks.post_tool_hooks:
+                            result = await self._hooks.run_post_tool(
+                                tool_name, parameters, result,
+                            )
+
                         return result
                 except Exception as e:
                     logger.error(f"Error calling tool {tool_name}: {str(e)}")
@@ -1926,6 +2095,14 @@ Example response for calculator:
 
             evaluation = await self.evaluate_tool_use(context)
 
+            # Check for text_response (model is done, no more tool calls)
+            if evaluation.get("text_response"):
+                final_response = {
+                    "text_response": evaluation["text_response"],
+                    "history": turn_history,
+                }
+                break
+
             if not evaluation.get("selected_tool"):
                 # No tool selected = task complete or no match
                 if turn_history:
@@ -1937,34 +2114,64 @@ Example response for calculator:
             tool_name = evaluation["selected_tool"]
             parameters = evaluation["parameters"]
 
-            try:
-                result = await self.call(tool_name, parameters)
-            except Exception as e:
-                result = f"Error: {str(e)}"
+            # Execute the tool call(s)
+            # Support parallel tool calls if the model returns additional_tools
+            additional_tools = evaluation.get("additional_tools", [])
+            if additional_tools:
+                # Parallel execution with asyncio.gather
+                async def _safe_call(name, params):
+                    try:
+                        return name, params, await self.call(name, params), None
+                    except Exception as e:
+                        return name, params, None, str(e)
 
-            turn_result = {
-                "turn": turn + 1,
-                "tool_used": tool_name,
-                "parameters": parameters,
-                "reasoning": evaluation.get("reasoning", ""),
-                "result": result
-            }
-            turn_history.append(turn_result)
+                tasks = [_safe_call(tool_name, parameters)]
+                for extra in additional_tools:
+                    tasks.append(_safe_call(extra["tool"], extra.get("parameters", {})))
 
-            # If this was search_tools, continue to next turn
+                results = await asyncio.gather(*tasks)
+
+                for t_name, t_params, t_result, t_error in results:
+                    turn_result = {
+                        "turn": turn + 1,
+                        "tool_used": t_name,
+                        "parameters": t_params,
+                        "reasoning": evaluation.get("reasoning", ""),
+                        "result": t_result if t_error is None else f"Error: {t_error}",
+                    }
+                    turn_history.append(turn_result)
+            else:
+                # Single tool call (most common path)
+                try:
+                    result = await self.call(tool_name, parameters)
+                except Exception as e:
+                    result = f"Error: {str(e)}"
+
+                turn_result = {
+                    "turn": turn + 1,
+                    "tool_used": tool_name,
+                    "parameters": parameters,
+                    "reasoning": evaluation.get("reasoning", ""),
+                    "result": result
+                }
+                turn_history.append(turn_result)
+
+            # search_tools is always a continuation signal
             if tool_name == "search_tools":
                 continue
 
-            # For other tools, check if we should continue
-            # Currently: one non-search tool call = done
-            final_response = turn_result
-            break
+            # Multi-turn: continue looping — the model decides when to stop
+            # by returning no tool or a text_response
 
         if final_response is None:
             final_response = {
                 "error": f"Max turns ({self.max_turns}) reached",
-                "history": turn_history
+                "history": turn_history,
             }
+            # Include last turn result if available
+            if turn_history:
+                final_response["tool_used"] = turn_history[-1].get("tool_used")
+                final_response["result"] = turn_history[-1].get("result")
 
         # Store agent response in memory
         if self.memory_enabled and "tool_used" in final_response:
@@ -1995,6 +2202,10 @@ Example response for calculator:
                 "tool_used": final_response.get('tool_used')
             }
         )
+
+        # On-stop hooks
+        if self._hooks and self._hooks.on_stop_hooks:
+            final_response = await self._hooks.run_on_stop(final_response)
 
         return final_response
 
