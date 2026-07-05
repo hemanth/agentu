@@ -18,7 +18,7 @@ class ContextMixin:
         compaction: str = "auto",
         keep_recent: int = 5,
         max_result_chars: int = 2000,
-    ) -> 'ContextMixin':
+    ) -> 'Agent':
         """Configure context management and compaction.
 
         Prevents context window overflow in long-running loops by

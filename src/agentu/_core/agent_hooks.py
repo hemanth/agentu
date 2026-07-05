@@ -25,7 +25,7 @@ class HooksMixin:
         mode: str = "auto",
         can_use_tool: Optional[Callable] = None,
         allow_dangerous: bool = False,
-    ) -> 'HooksMixin':
+    ) -> 'Agent':
         """Configure tool permission policy.
 
         Permission modes:
@@ -84,7 +84,7 @@ class HooksMixin:
         pre_tool: Optional[Union[PreToolHook, List[PreToolHook]]] = None,
         post_tool: Optional[Union[PostToolHook, List[PostToolHook]]] = None,
         on_stop: Optional[Union[OnStopHook, List[OnStopHook]]] = None,
-    ) -> 'HooksMixin':
+    ) -> 'Agent':
         """Register lifecycle hooks on this agent.
 
         Hooks can be sync or async callables.  Multiple calls to

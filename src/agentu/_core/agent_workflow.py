@@ -2,7 +2,10 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, Union, List, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .agent import Agent
 
 from ..middleware.observe import EventType
 
@@ -19,7 +22,7 @@ class WorkflowMixin:
     def with_subagents(
         self,
         agents: Union[str, List[Dict[str, Any]]],
-    ) -> 'WorkflowMixin':
+    ) -> 'Agent':
         """Configure sub-agents for delegation.
 
         Sub-agents are lightweight agent roles (maker, checker) that
@@ -50,7 +53,7 @@ class WorkflowMixin:
         self,
         branch: Optional[str] = None,
         cleanup: bool = True,
-    ) -> 'WorkflowMixin':
+    ) -> 'Agent':
         """Enable git worktree isolation for this agent.
 
         When enabled, infer() and delegate() run in isolated git
@@ -82,7 +85,7 @@ class WorkflowMixin:
         prompt_file: Optional[str] = None,
         ralph: Optional[str] = None,
         max_runs: Optional[int] = None,
-    ) -> 'WorkflowMixin':
+    ) -> 'Agent':
         """Schedule this agent to run on a cadence.
 
         Supports interval (every N minutes) or cron expressions.
@@ -128,7 +131,7 @@ class WorkflowMixin:
         logger.info(f"Added schedule {config.id} to agent {self.name}")
         return self
 
-    async def start(self):
+    async def start(self) -> None:
         """Start all configured schedules.
 
         Runs all schedules concurrently. Blocks until all schedules
@@ -144,13 +147,13 @@ class WorkflowMixin:
         tasks = [asyncio.create_task(s.start()) for s in self._schedulers]
         await asyncio.gather(*tasks)
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop all running schedules gracefully."""
         if hasattr(self, '_schedulers'):
             for scheduler in self._schedulers:
                 scheduler.stop()
 
-    def findings(self, status: str = "pending", limit: int = 50):
+    def findings(self, status: str = "pending", limit: int = 50) -> List[Dict[str, Any]]:
         """Get findings from scheduled runs.
 
         Args:
@@ -288,8 +291,8 @@ class WorkflowMixin:
         max_iterations: int = 50,
         timeout_minutes: int = 30,
         checkpoint_every: int = 5,
-        on_iteration=None
-    ):
+        on_iteration: Optional[Callable] = None
+    ) -> Dict[str, Any]:
         """Run agent in Ralph mode (autonomous loop).
         
         Ralph continuously reads a prompt file and executes until

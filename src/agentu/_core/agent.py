@@ -1822,61 +1822,7 @@ Example response for calculator:
                     raise
         raise ValueError(f"Tool {tool_name} not found")
 
-    async def _call_sandboxed(self, tool, parameters: Dict[str, Any]) -> Any:
-        """Execute a tool in the sandbox backend.
 
-        Serializes the tool function to source code, runs it in subprocess,
-        and parses the JSON result.
-        """
-        import inspect as _inspect
-        from ..runtime.sandbox import build_tool_code
-
-        try:
-            func_source = _inspect.getsource(tool.function)
-        except (OSError, TypeError):
-            # Can't get source (builtins, lambdas, etc.) -- fall back to in-process
-            logger.warning(
-                f"Tool '{tool.name}' cannot be sandboxed (no source). Running in-process."
-            )
-            result = tool.function(**parameters)
-            if asyncio.iscoroutine(result):
-                result = await result
-            return result
-
-        # Dedent the source in case it's a nested function
-        import textwrap
-        func_source = textwrap.dedent(func_source)
-
-        code = build_tool_code(func_source, tool.function.__name__, parameters)
-        sandbox_result = await self._sandbox.execute(code, self._sandbox_limits)
-
-        # Record sandbox execution details in observer
-        self.observer.record(EventType.TOOL_CALL, {
-            "tool_name": tool.name,
-            "sandbox_exit_code": sandbox_result.exit_code,
-            "sandbox_timed_out": sandbox_result.timed_out,
-            "sandbox_stderr": sandbox_result.error,
-        })
-
-        if sandbox_result.timed_out:
-            raise TimeoutError(
-                f"Tool '{tool.name}' timed out after {self._sandbox_limits.timeout_seconds}s"
-            )
-
-        if not sandbox_result.success:
-            raise RuntimeError(
-                f"Tool '{tool.name}' failed in sandbox: {sandbox_result.error}"
-            )
-
-        # Parse JSON output from subprocess
-        output = sandbox_result.output.strip()
-        if output:
-            try:
-                parsed = json.loads(output)
-                return parsed.get("result", output)
-            except json.JSONDecodeError:
-                return output
-        return None
 
     def _match_skills(self, prompt: str,
                       embedding_provider: Optional[Any] = None,
@@ -2368,43 +2314,7 @@ Example response for calculator:
         
         return "\n".join(context_parts)
 
-    async def ralph(
-        self,
-        prompt_file: str,
-        max_iterations: int = 50,
-        timeout_minutes: int = 30,
-        checkpoint_every: int = 5,
-        on_iteration=None
-    ):
-        """Run agent in Ralph mode (autonomous loop).
-        
-        Ralph continuously reads a prompt file and executes until
-        all checkpoints are complete or limits are reached.
-        
-        Args:
-            prompt_file: Path to PROMPT.md file with goal and checkpoints
-            max_iterations: Maximum loop iterations (safety limit)
-            timeout_minutes: Maximum runtime in minutes
-            checkpoint_every: Save state every N iterations
-            on_iteration: Optional callback(iteration, result_dict)
-            
-        Returns:
-            Execution summary dict
-            
-        Example:
-            >>> result = await agent.ralph("PROMPT.md", max_iterations=50)
-        """
-        from ..workflow.ralph import RalphRunner, RalphConfig
-        
-        config = RalphConfig(
-            prompt_file=prompt_file,
-            max_iterations=max_iterations,
-            timeout_minutes=timeout_minutes,
-            checkpoint_every=checkpoint_every
-        )
-        
-        runner = RalphRunner(self, config)
-        return await runner.run(on_iteration=on_iteration)
+
 
 
     def with_otel(

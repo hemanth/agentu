@@ -45,8 +45,6 @@ class Session:
                 use_sqlite=True,
                 storage_path=storage_path,
             )
-        # Expose storage backend (if agent has one) for external consumers
-        self._storage_backend = getattr(self.agent, '_storage_backend', None)
     
     async def send(self, message: str) -> Dict[str, Any]:
         """Send a message in this session.

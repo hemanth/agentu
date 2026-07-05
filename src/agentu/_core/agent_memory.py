@@ -1,7 +1,11 @@
 """MemoryMixin – memory-related methods extracted from Agent."""
 
+import asyncio
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -11,11 +15,15 @@ class MemoryMixin:
 
     Methods here assume they are mixed into an Agent instance that has
     ``memory_enabled``, ``memory``, and ``observer`` attributes.
+
+    When the agent has a ``_vector_backend`` configured (via
+    ``with_vectors()``), ``remember()`` and ``recall(semantic=True)``
+    will use it for embedding-based storage and retrieval.
     """
 
     def remember(self, content: str, memory_type: str = 'conversation',
                 metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
-                store_long_term: bool = False):
+                store_long_term: bool = False) -> None:
         """Store information in memory.
 
         Args:
@@ -29,11 +37,42 @@ class MemoryMixin:
             logger.warning("Memory is not enabled for this agent")
             return
 
-        self.memory.remember(content, memory_type, metadata, importance, store_long_term)
+        entry = self.memory.remember(content, memory_type, metadata, importance, store_long_term)
+
+        # Also store in vector backend for semantic search if available
+        vector_backend = getattr(self, '_vector_backend', None)
+        if vector_backend is not None and (store_long_term or importance >= 0.7):
+            self._store_to_vector_backend(content, entry, memory_type, metadata)
+
+    def _store_to_vector_backend(self, content: str, entry: Any,
+                                  memory_type: str,
+                                  metadata: Optional[Dict[str, Any]]) -> None:
+        """Store a memory entry in the vector backend (fire-and-forget)."""
+        embedding_provider = getattr(self.memory, 'embedding_provider', None)
+        if embedding_provider is None:
+            logger.debug("No embedding provider for vector backend storage")
+            return
+
+        async def _store():
+            try:
+                embedding = await embedding_provider.embed(content)
+                meta = dict(metadata or {})
+                meta['memory_type'] = memory_type
+                meta['content'] = content
+                key = f"mem:{getattr(entry, 'id', id(entry))}"
+                await self._vector_backend.store(key, embedding, meta)
+            except Exception:
+                logger.debug("Vector backend store failed", exc_info=True)
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_store())
+        except RuntimeError:
+            asyncio.run(_store())
 
     def recall(self, query: Optional[str] = None, memory_type: Optional[str] = None,
               limit: int = 5, include_short_term: bool = True,
-              semantic: bool = False, semantic_threshold: float = 0.0):
+              semantic: bool = False, semantic_threshold: float = 0.0) -> list:
         """Recall memories.
 
         Args:
@@ -42,7 +81,8 @@ class MemoryMixin:
             limit: Maximum number of results
             include_short_term: Whether to include short-term memories
             semantic: If True, use embedding-based similarity search
-                instead of substring matching (requires embedding provider)
+                instead of substring matching (requires embedding provider
+                or a vector backend configured via ``with_vectors()``)
             semantic_threshold: Minimum similarity score for semantic recall
 
         Returns:
@@ -52,10 +92,67 @@ class MemoryMixin:
             logger.warning("Memory is not enabled for this agent")
             return []
 
+        # Try vector backend for semantic recall if available and
+        # the in-memory semantic index isn't ready
+        vector_backend = getattr(self, '_vector_backend', None)
+        if (semantic and query and vector_backend is not None
+                and not getattr(self.memory.long_term, '_semantic_ready', False)):
+            vector_results = self._recall_from_vector_backend(
+                query, limit, semantic_threshold
+            )
+            if vector_results:
+                return vector_results
+
         return self.memory.recall(
             query, memory_type, limit, include_short_term,
             semantic=semantic, semantic_threshold=semantic_threshold,
         )
+
+    def _recall_from_vector_backend(self, query: str, limit: int,
+                                     threshold: float) -> list:
+        """Search the vector backend for semantically similar memories."""
+        embedding_provider = getattr(self.memory, 'embedding_provider', None)
+        if embedding_provider is None:
+            return []
+
+        async def _search():
+            query_embedding = await embedding_provider.embed(query)
+            results = await self._vector_backend.search(
+                query_embedding, limit=limit
+            )
+            return results
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        try:
+            if loop and loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    results = pool.submit(asyncio.run, _search()).result()
+            else:
+                results = asyncio.run(_search())
+        except Exception:
+            logger.debug("Vector backend search failed", exc_info=True)
+            return []
+
+        # Convert vector backend results to MemoryEntry-like objects
+        from ..memory.memory import MemoryEntry
+        entries = []
+        for key, score, meta in results:
+            if score < threshold:
+                continue
+            content = meta.get('content', '')
+            entry = MemoryEntry(
+                content=content,
+                memory_type=meta.get('memory_type', 'fact'),
+                metadata=meta,
+                importance=score,
+            )
+            entries.append(entry)
+        return entries
 
     def get_memory_context(self, max_entries: int = 5) -> str:
         """Get formatted context from memories.
@@ -71,7 +168,7 @@ class MemoryMixin:
 
         return self.memory.get_context(max_entries)
 
-    def consolidate_memory(self, importance_threshold: float = 0.6):
+    def consolidate_memory(self, importance_threshold: float = 0.6) -> None:
         """Consolidate short-term memories to long-term storage.
 
         Args:
@@ -83,7 +180,7 @@ class MemoryMixin:
 
         self.memory.consolidate_to_long_term(importance_threshold)
 
-    def clear_short_term_memory(self):
+    def clear_short_term_memory(self) -> None:
         """Clear short-term memory."""
         if not self.memory_enabled:
             logger.warning("Memory is not enabled for this agent")
@@ -91,7 +188,7 @@ class MemoryMixin:
 
         self.memory.clear_short_term()
 
-    def save_memory(self):
+    def save_memory(self) -> None:
         """Save memory to persistent storage."""
         if not self.memory_enabled:
             logger.warning("Memory is not enabled for this agent")

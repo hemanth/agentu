@@ -675,11 +675,12 @@ Swap between SQLite and Redis for sessions, checkpoints, and memory:
 # Default — SQLite, zero-config
 agent = Agent("bot")
 
-# Redis — horizontal scaling
+# Redis — sessions, checkpoints, and serve() use Redis automatically
 agent = Agent("bot").with_backend("redis://localhost:6379")
 
-# LanceDB — production vector search (embedded, serverless)
+# LanceDB — vector store for semantic search in custom tools
 agent = Agent("bot").with_vectors("./vectors")
+backend = await agent.get_vector_backend()  # use in your tools
 
 # Or bring your own backend
 from agentu import StorageBackend, VectorBackend

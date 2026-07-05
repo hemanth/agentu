@@ -28,7 +28,7 @@ class SandboxMixin:
         max_memory_mb: Optional[int] = 256,
         allow_network: bool = True,
         codemode: bool = False,
-    ) -> 'SandboxMixin':
+    ) -> 'Agent':
         """Set up a sandboxed execution environment.
 
         Tools in `read_tools` get READONLY permission (no side effects).
