@@ -161,6 +161,7 @@ class RedisBackend:
                 self._client = redis.from_url(self.url, decode_responses=True)
                 self._client.ping()
             except Exception:
+                logger.debug("Redis connection failed", exc_info=True)
                 self._client = None
         return self._client
 
@@ -244,6 +245,7 @@ class FilesystemBackend:
                 return None
             return data["value"]
         except Exception:
+            logger.debug("Filesystem cache read failed for key %s", key, exc_info=True)
             return None
 
     async def set(self, key: str, value: dict, ttl: Optional[int] = None) -> None:

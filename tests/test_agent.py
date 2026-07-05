@@ -117,7 +117,7 @@ def test_with_tools_auto_wrap():
     assert "y" in agent.tools[0].parameters
 
 
-def test_with_toolss_auto_wrap():
+def test_with_tools_auto_wrap():
     """Test that add_tools auto-wraps raw functions."""
     agent = Agent(name="test_agent")
 
@@ -137,7 +137,7 @@ def test_with_toolss_auto_wrap():
     assert agent.tools[1].name == "func2"
 
 
-def test_with_toolss_mixed():
+def test_with_tools_mixed():
     """Test that add_tools handles both Tool objects and raw functions."""
     agent = Agent(name="test_agent")
 
@@ -172,7 +172,7 @@ def test_with_tools_invalid_type():
         agent.with_tools([123])
 
 
-def test_with_toolss_invalid_type():
+def test_with_tools_invalid_type():
     """Test that add_tools raises TypeError for invalid types in list."""
     agent = Agent(name="test_agent")
 

@@ -294,7 +294,7 @@ class LanceDBBackend:
         try:
             self._table = self._db.open_table(self._table_name)
         except Exception:
-            # Table doesn't exist — create with schema from first vector
+            logger.debug("LanceDB table '%s' not found, creating", self._table_name, exc_info=True)
             data = [{
                 "key": "__init__",
                 "vector": embedding,
@@ -330,7 +330,7 @@ class LanceDBBackend:
             try:
                 table.delete(f'key = "{key}"')
             except Exception:
-                pass
+                logger.debug("LanceDB delete fallback also failed", exc_info=True)
             table.add([row])
 
     async def search(
@@ -342,6 +342,7 @@ class LanceDBBackend:
         try:
             table = self._get_or_create_table(query_embedding)
         except Exception:
+            logger.debug("LanceDB table access failed for search", exc_info=True)
             return []
 
         try:
@@ -352,6 +353,7 @@ class LanceDBBackend:
                 .to_list()
             )
         except Exception:
+            logger.debug("LanceDB search query failed", exc_info=True)
             return []
 
         output = []
@@ -372,6 +374,7 @@ class LanceDBBackend:
             table.delete(f'key = "{key}"')
             return True
         except Exception:
+            logger.debug("LanceDB delete failed", exc_info=True)
             return False
 
     async def count(self) -> int:
@@ -379,6 +382,7 @@ class LanceDBBackend:
             table = self._get_or_create_table([0.0])
             return table.count_rows()
         except Exception:
+            logger.debug("LanceDB count failed", exc_info=True)
             return 0
 
     def close(self):
