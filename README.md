@@ -641,6 +641,56 @@ serve(agent, port=8000, enable_cors=True)
 
 Endpoints: `/execute`, `/process`, `/tools`, `/memory/remember`, `/memory/recall`, `/docs`
 
+### Scaling
+
+```python
+# Multi-worker deployment
+serve(agent, port=8000, workers=4)
+
+# Redis-backed sessions for horizontal scaling
+serve(agent, port=8000, workers=4, redis_url="redis://localhost:6379")
+
+# ASGI app for custom deployment (gunicorn, Docker, k8s)
+from agentu import create_server
+
+app = create_server(agent, enable_cors=True)
+# Run with: uvicorn app:app --workers 4 --host 0.0.0.0
+```
+
+### Async tasks
+
+Long-running `infer()` calls can run in the background:
+
+```python
+# POST /process?background=true → returns task_id immediately
+# GET /tasks/{task_id} → poll for result
+# DELETE /tasks/{task_id} → cancel
+```
+
+## Storage backends
+
+Swap between SQLite and Redis for sessions, checkpoints, and memory:
+
+```python
+# Default — SQLite, zero-config
+agent = Agent("bot")
+
+# Redis — horizontal scaling
+agent = Agent("bot").with_backend("redis://localhost:6379")
+
+# pgvector — production vector search
+agent = Agent("bot").with_vectors("postgresql://localhost/agentu")
+
+# Or bring your own backend
+from agentu import StorageBackend, VectorBackend
+agent = Agent("bot").with_backend(MyCustomBackend())
+```
+
+```bash
+pip install agentu[redis]      # Redis support
+pip install agentu[pgvector]   # pgvector support
+```
+
 ## API reference
 
 ```python
@@ -656,6 +706,8 @@ agent.with_rules("AGENTS.md")            # project-level rules
 agent.with_notifier(["slack://bot-token"])       # notifications
 agent.with_permissions(allow_dangerous=True)     # permission control
 await agent.with_mcp([url])              # MCP servers
+agent.with_backend("redis://...")         # Redis storage backend
+agent.with_vectors("postgresql://...")    # pgvector for semantic search
 
 # Loop Engineering
 agent.with_schedule(every=30, prompt="...")       # interval schedule

@@ -4,13 +4,14 @@ import asyncio
 import json
 import logging
 from typing import Dict, Any, Optional, List, Union
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
 
 from .session import SessionManager
+from .tasks import TaskQueue, TaskStatus
 
 from .._core.agent import Agent
 
@@ -49,7 +50,10 @@ class AgentServer:
         cors_origins: Optional[List[str]] = None,
         cors_methods: Optional[List[str]] = None,
         cors_headers: Optional[List[str]] = None,
-        cors_credentials: bool = False
+        cors_credentials: bool = False,
+        redis_url: Optional[str] = None,
+        max_tasks: int = 10,
+        task_ttl: int = 3600,
     ):
         """Initialize agent server.
 
@@ -62,10 +66,32 @@ class AgentServer:
             cors_methods: Allowed HTTP methods (default: ["*"])
             cors_headers: Allowed headers (default: ["*"])
             cors_credentials: Allow credentials (default: False)
+            redis_url: Optional Redis connection URL.  When set, sessions
+                and task results are stored in Redis for multi-worker
+                scalability.
+            max_tasks: Maximum concurrent background tasks (default: 10)
+            task_ttl: Seconds before completed task results expire
+                (default: 3600)
         """
         self.agent = agent
+        self.redis_url = redis_url
         self.session_manager = SessionManager()
         self.app = FastAPI(title=title, version=version)
+
+        # Redis-backed session store (optional)
+        self._redis_session_store = None
+        if redis_url:
+            from .redis_backend import RedisSessionStore
+
+            self._redis_session_store = RedisSessionStore(redis_url=redis_url)
+            logger.info("Using Redis session store at %s", redis_url)
+
+        # Task queue
+        self.task_queue = TaskQueue(
+            max_concurrent=max_tasks,
+            task_ttl=task_ttl,
+            redis_url=redis_url,
+        )
 
         # Setup CORS if enabled
         if enable_cors:
@@ -137,15 +163,35 @@ class AgentServer:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/process", tags=["execution"])
-        async def process_input(request: ProcessRequest):
+        async def process_input(
+            request: ProcessRequest,
+            background: bool = Query(False, description="Run in background and return a task_id"),
+        ):
             """Process natural language input and execute appropriate tool.
+
+            When ``background=true`` the request is queued and a task ID is
+            returned immediately.  Poll ``GET /tasks/{task_id}`` for the
+            result.
 
             Args:
                 request: ProcessRequest with natural language input
+                background: If true, run asynchronously
 
             Returns:
-                Processing result including tool used and output
+                Processing result including tool used and output, or a
+                ``{"task_id": ..., "status": "submitted"}`` envelope.
             """
+            if background:
+                agent = self.agent
+                user_input = request.input
+
+                async def _work():
+                    result = await agent.infer(user_input)
+                    return {"success": True, "input": user_input, **result}
+
+                info = await self.task_queue.submit(lambda: _work())
+                return {"task_id": info.task_id, "status": info.status.value}
+
             try:
                 result = await self.agent.infer(request.input)
                 return {
@@ -295,6 +341,33 @@ class AgentServer:
             
             return result
 
+        # ── task endpoints ─────────────────────────────────────
+
+        @self.app.get("/tasks/{task_id}", tags=["tasks"])
+        async def get_task(task_id: str):
+            """Get the status and result of a background task."""
+            info = await self.task_queue.get(task_id)
+            if info is None:
+                raise HTTPException(status_code=404, detail="Task not found")
+            return info.to_dict()
+
+        @self.app.delete("/tasks/{task_id}", tags=["tasks"])
+        async def cancel_task(task_id: str):
+            """Cancel a running or submitted task."""
+            cancelled = await self.task_queue.cancel(task_id)
+            if not cancelled:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Task not found or already completed",
+                )
+            return {"task_id": task_id, "status": "cancelled"}
+
+        @self.app.get("/tasks", tags=["tasks"])
+        async def list_tasks():
+            """List all known background tasks."""
+            tasks = await self.task_queue.list_tasks()
+            return {"tasks": tasks}
+
         @self.app.get("/transports", tags=["info"])
         async def transports():
             """List available transport methods."""
@@ -302,6 +375,10 @@ class AgentServer:
                 "http": {"/process": "POST", "/execute": "POST"},
                 "websocket": {"/ws": "Bidirectional streaming with sessions"},
                 "sse": {"/stream": "POST → text/event-stream"},
+                "tasks": {
+                    "/tasks": "GET (list)",
+                    "/tasks/{id}": "GET (status) / DELETE (cancel)",
+                },
             }
 
         @self.app.get("/api/examples/{name}/steps", tags=["playground"])
@@ -444,6 +521,62 @@ class AgentServer:
         uvicorn.run(self.app, host=host, port=port, **kwargs)
 
 
+def create_server(
+    agent: Agent,
+    title: str = "agentu API",
+    version: str = "0.1.0",
+    enable_cors: bool = False,
+    cors_origins: Optional[List[str]] = None,
+    cors_methods: Optional[List[str]] = None,
+    cors_headers: Optional[List[str]] = None,
+    cors_credentials: bool = False,
+    redis_url: Optional[str] = None,
+    max_tasks: int = 10,
+    task_ttl: int = 3600,
+) -> FastAPI:
+    """Create and return the ASGI app without starting the server.
+
+    Use this when you need fine-grained control over how the app is run,
+    e.g. via ``uvicorn`` CLI with multiple workers::
+
+        # app.py
+        app = create_server(agent, enable_cors=True)
+
+        # shell
+        uvicorn app:app --workers 4
+
+    Args:
+        agent: Agent instance to serve
+        title: API title
+        version: API version
+        enable_cors: Enable CORS middleware
+        cors_origins: Allowed origins for CORS
+        cors_methods: Allowed HTTP methods
+        cors_headers: Allowed headers
+        cors_credentials: Allow credentials
+        redis_url: Optional Redis URL for distributed sessions/tasks
+        max_tasks: Maximum concurrent background tasks (default: 10)
+        task_ttl: Seconds before completed task results expire
+
+    Returns:
+        A ``FastAPI`` application instance.
+    """
+    server = AgentServer(
+        agent,
+        title=title,
+        version=version,
+        enable_cors=enable_cors,
+        cors_origins=cors_origins,
+        cors_methods=cors_methods,
+        cors_headers=cors_headers,
+        cors_credentials=cors_credentials,
+        redis_url=redis_url,
+        max_tasks=max_tasks,
+        task_ttl=task_ttl,
+    )
+    return server.app
+
+
 def serve(
     agent: Agent,
     host: str = "0.0.0.0",
@@ -455,6 +588,8 @@ def serve(
     cors_methods: Optional[List[str]] = None,
     cors_headers: Optional[List[str]] = None,
     cors_credentials: bool = False,
+    redis_url: Optional[str] = None,
+    workers: int = 1,
     **kwargs
 ):
     """Serve an agent with HTTP, WebSocket, and SSE transports.
@@ -463,6 +598,7 @@ def serve(
         HTTP:  POST /process, POST /execute  (request-response)
         WSS:   WS   /ws                      (bidirectional streaming)
         SSE:   POST /stream                   (server-sent events)
+        Tasks: GET  /tasks/{id}, DELETE /tasks/{id}
 
     Args:
         agent: Agent instance to serve
@@ -475,6 +611,9 @@ def serve(
         cors_methods: Allowed HTTP methods (default: ["*"])
         cors_headers: Allowed headers (default: ["*"])
         cors_credentials: Allow credentials (default: False)
+        redis_url: Optional Redis connection URL for distributed
+            sessions and tasks
+        workers: Number of uvicorn worker processes (default: 1)
         **kwargs: Additional uvicorn.run arguments
 
     Examples:
@@ -482,6 +621,9 @@ def serve(
         >>> from agentu import Agent, serve
         >>> agent = Agent("assistant", model="llama3")
         >>> serve(agent, port=8000)
+
+        Multi-worker with Redis:
+        >>> serve(agent, redis_url="redis://localhost:6379/0", workers=4)
 
         WebSocket client:
         >>> import websockets
@@ -503,6 +645,7 @@ def serve(
         cors_origins=cors_origins,
         cors_methods=cors_methods,
         cors_headers=cors_headers,
-        cors_credentials=cors_credentials
+        cors_credentials=cors_credentials,
+        redis_url=redis_url,
     )
-    server.run(host=host, port=port, **kwargs)
+    server.run(host=host, port=port, workers=workers, **kwargs)

@@ -2772,6 +2772,63 @@ Example response for calculator:
         self._otel_exporter = exporter
         return self
 
+    def with_backend(
+        self,
+        backend: Union[str, Any],
+    ) -> 'Agent':
+        """Set the key-value storage backend for sessions, checkpoints, and memory.
+
+        Args:
+            backend: Either a Redis URL string (``redis://host:6379/0``)
+                or a :class:`StorageBackend` instance.
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("bot").with_backend("redis://localhost:6379")
+            >>> # or with a custom backend
+            >>> agent = Agent("bot").with_backend(MyCustomBackend())
+        """
+        if isinstance(backend, str):
+            # Treat as Redis URL — lazy-create on first use
+            self._backend_url = backend
+            self._storage_backend = None  # Created async on first access
+        else:
+            self._storage_backend = backend
+            self._backend_url = None
+        return self
+
+    def with_vectors(
+        self,
+        backend: Union[str, Any],
+        dimension: int = 384,
+    ) -> 'Agent':
+        """Set the vector storage backend for semantic search.
+
+        Args:
+            backend: Either a PostgreSQL DSN (``postgresql://host/db``)
+                or a :class:`VectorBackend` instance.
+            dimension: Embedding dimension (default: 384 for MiniLM).
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> agent = Agent("bot").with_vectors("postgresql://localhost/agentu")
+            >>> # or with a custom backend
+            >>> from agentu.storage import InMemoryVectorBackend
+            >>> agent = Agent("bot").with_vectors(InMemoryVectorBackend())
+        """
+        if isinstance(backend, str):
+            self._vector_dsn = backend
+            self._vector_dimension = dimension
+            self._vector_backend = None  # Created async on first access
+        else:
+            self._vector_backend = backend
+            self._vector_dsn = None
+        return self
+
     def with_subagents(
         self,
         agents: Union[str, List[Dict[str, Any]]],

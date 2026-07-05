@@ -41,7 +41,7 @@ semantic = [
     "sentence-transformers>=2.2.0",
 ]
 redis = [
-    "redis>=4.0.0",
+    "redis>=5.0.0",
 ]
 notify = [
     "apprise>=1.0.0",
@@ -49,9 +49,17 @@ notify = [
 yaml = [
     "PyYAML>=6.0",
 ]
+pgvector = [
+    "asyncpg>=0.29.0",
+]
+otel = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+]
 cache-all = [
     "sentence-transformers>=2.2.0",
-    "redis>=4.0.0",
+    "redis>=5.0.0",
 ]
 
 [project.scripts]
