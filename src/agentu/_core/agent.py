@@ -230,6 +230,43 @@ class Agent:
                 name="record_rationale"
             ))
 
+        # Storage backends (set via with_backend / with_vectors)
+        self._storage_backend = None
+        self._backend_url: Optional[str] = None
+        self._vector_backend = None
+        self._vector_dsn: Optional[str] = None
+        self._vector_dimension: int = 384
+
+    async def get_storage_backend(self):
+        """Get or lazily create the key-value storage backend.
+
+        Returns the configured StorageBackend. If with_backend() was called
+        with a Redis URL, the backend is created on first access.
+        Returns None if no backend is configured (uses component defaults).
+        """
+        if self._storage_backend is not None:
+            return self._storage_backend
+        if self._backend_url:
+            from ..storage import RedisStorageBackend
+            self._storage_backend = await RedisStorageBackend.create(self._backend_url)
+            return self._storage_backend
+        return None
+
+    async def get_vector_backend(self):
+        """Get or lazily create the vector storage backend.
+
+        Returns the configured VectorBackend. If with_vectors() was called
+        with a path/URI, a LanceDBBackend is created on first access.
+        Returns None if no backend is configured (uses in-memory vectors).
+        """
+        if self._vector_backend is not None:
+            return self._vector_backend
+        if self._vector_dsn:
+            from ..storage import LanceDBBackend
+            self._vector_backend = LanceDBBackend.create(self._vector_dsn)
+            return self._vector_backend
+        return None
+
     @classmethod
     async def from_config(cls, path: str) -> 'Agent':
         """Load an agent declaratively from a JSON or YAML configuration file.

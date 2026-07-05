@@ -637,6 +637,10 @@ def serve(
         >>> #   -H 'Content-Type: application/json' \\
         >>> #   -d '{"input": "hello"}'
     """
+    # If no explicit redis_url but agent has a backend URL configured, use it
+    if redis_url is None:
+        redis_url = getattr(agent, '_backend_url', None)
+
     server = AgentServer(
         agent,
         title=title,

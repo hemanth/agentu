@@ -38,11 +38,15 @@ class Session:
         """Initialize session with memory enabled."""
         if not self.agent.memory_enabled:
             self.agent.memory_enabled = True
+            # Use agent's configured storage path, or default
+            storage_path = f".sessions/{self.session_id}.db"
             self.agent.memory = Memory(
                 short_term_size=20,  # Larger for sessions
                 use_sqlite=True,
-                storage_path=f".sessions/{self.session_id}.db"
+                storage_path=storage_path,
             )
+        # Expose storage backend (if agent has one) for external consumers
+        self._storage_backend = getattr(self.agent, '_storage_backend', None)
     
     async def send(self, message: str) -> Dict[str, Any]:
         """Send a message in this session.
