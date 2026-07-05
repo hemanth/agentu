@@ -117,8 +117,10 @@ class Session:
 
         Args:
             store: ``CheckpointStore`` to persist the snapshot to.
-                If *None*, a default store at ``.checkpoints/checkpoints.db``
-                is used.
+                If *None* and the agent has a storage backend configured
+                (via ``with_backend()``), the checkpoint is stored there.
+                Otherwise a default SQLite store at
+                ``.checkpoints/checkpoints.db`` is used.
             fork: If *True*, the checkpoint is saved under a **new**
                 session ID (a fork), and the returned data has a fresh
                 ``session_id`` with ``parent_session_id`` pointing back
@@ -156,12 +158,33 @@ class Session:
             checkpointed_at=time.time(),
             parent_session_id=parent_id,
         )
-        store.save(data)
-        logger.info(
-            "Checkpointed session %s (fork=%s)",
-            data.session_id,
-            fork,
-        )
+
+        # Persist to storage backend if available, else default store
+        backend = getattr(self.agent, '_storage_backend', None)
+        if backend is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            key = f"checkpoint:{data.session_id}"
+            import json as _json
+            payload = _json.dumps(data.to_dict())
+            if loop and loop.is_running():
+                # Schedule async set without blocking
+                loop.create_task(backend.set(key, payload))
+            else:
+                asyncio.run(backend.set(key, payload))
+            logger.info(
+                "Checkpointed session %s to storage backend (fork=%s)",
+                data.session_id, fork,
+            )
+        else:
+            store.save(data)
+            logger.info(
+                "Checkpointed session %s (fork=%s)",
+                data.session_id, fork,
+            )
         return data
 
     def to_dict(self) -> Dict[str, Any]:
@@ -287,7 +310,33 @@ class SessionManager:
         if store is None:
             store = CheckpointStore()
 
-        data = store.load(session_id)
+        # Try loading from agent's storage backend first
+        data = None
+        backend = getattr(agent, '_storage_backend', None)
+        if backend is not None:
+            import asyncio
+            import json as _json
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            key = f"checkpoint:{session_id}"
+            try:
+                if loop and loop.is_running():
+                    # Can't await in sync context, fall through to store
+                    pass
+                else:
+                    raw = asyncio.run(backend.get(key))
+                    if raw:
+                        data = CheckpointData.from_dict(_json.loads(raw))
+                        logger.info("Loaded checkpoint %s from storage backend", session_id)
+            except Exception:
+                logger.debug("Storage backend load failed, falling back to SQLite", exc_info=True)
+
+        # Fallback to SQLite checkpoint store
+        if data is None:
+            data = store.load(session_id)
+
         if data is None:
             logger.warning("No checkpoint found for session %s", session_id)
             return None
