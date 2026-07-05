@@ -929,10 +929,8 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin):
         return f"Rationale for '{action}' recorded successfully."
 
 
-    def set_context(self, context: str) -> None:
-        """Set the context for the agent."""
-        self.context = context
-        
+
+
     def _format_tools_for_prompt(self) -> str:
         """Format tools and skills into a string for the prompt."""
         prompt_parts = []
