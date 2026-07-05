@@ -21,6 +21,34 @@ class MemoryMixin:
     will use it for embedding-based storage and retrieval.
     """
 
+    def _get_vector_backend_sync(self):
+        """Resolve vector backend, lazily creating from DSN if needed.
+
+        Returns the backend or None if not configured.
+        """
+        # Direct backend (set via with_vectors(backend_obj))
+        backend = getattr(self, '_vector_backend', None)
+        if backend is not None:
+            return backend
+        # DSN configured but not yet created (with_vectors("./path"))
+        dsn = getattr(self, '_vector_dsn', None)
+        if dsn is not None:
+            try:
+                # get_vector_backend is async; try to run sync
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop and loop.is_running():
+                    # Can't create synchronously inside event loop
+                    return None
+                backend = asyncio.run(self.get_vector_backend())
+                return backend
+            except Exception:
+                logger.debug("Failed to lazily create vector backend", exc_info=True)
+        return None
+
     def remember(self, content: str, memory_type: str = 'conversation',
                 metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
                 store_long_term: bool = False) -> None:
@@ -40,7 +68,7 @@ class MemoryMixin:
         entry = self.memory.remember(content, memory_type, metadata, importance, store_long_term)
 
         # Also store in vector backend for semantic search if available
-        vector_backend = getattr(self, '_vector_backend', None)
+        vector_backend = self._get_vector_backend_sync()
         if vector_backend is not None and (store_long_term or importance >= 0.7):
             self._store_to_vector_backend(content, entry, memory_type, metadata)
 
@@ -60,7 +88,7 @@ class MemoryMixin:
                 meta['memory_type'] = memory_type
                 meta['content'] = content
                 key = f"mem:{getattr(entry, 'id', id(entry))}"
-                await self._vector_backend.store(key, embedding, meta)
+                await self._get_vector_backend_sync().store(key, embedding, meta)
             except Exception:
                 logger.debug("Vector backend store failed", exc_info=True)
 
@@ -94,7 +122,7 @@ class MemoryMixin:
 
         # Try vector backend for semantic recall if available and
         # the in-memory semantic index isn't ready
-        vector_backend = getattr(self, '_vector_backend', None)
+        vector_backend = self._get_vector_backend_sync()
         if (semantic and query and vector_backend is not None
                 and not getattr(self.memory.long_term, '_semantic_ready', False)):
             vector_results = self._recall_from_vector_backend(
@@ -117,7 +145,7 @@ class MemoryMixin:
 
         async def _search():
             query_embedding = await embedding_provider.embed(query)
-            results = await self._vector_backend.search(
+            results = await self._get_vector_backend_sync().search(
                 query_embedding, limit=limit
             )
             return results
