@@ -242,65 +242,69 @@ class InMemoryVectorBackend:
         return len(self._vectors)
 
 
-class PgVectorBackend:
-    """PostgreSQL + pgvector backend for production vector search.
+class LanceDBBackend:
+    """LanceDB-backed vector storage for production semantic search.
 
-    Requires: pip install 'agentu[pgvector]'
+    Embedded, serverless, zero-config — like SQLite for vectors.
+
+    Requires: pip install 'agentu[vectors]'
 
     Usage:
-        backend = await PgVectorBackend.create(
-            "postgresql://localhost/agentu",
-            dimension=384,
-        )
+        backend = LanceDBBackend("./vectors")
         await backend.upsert("doc1", embedding, {"source": "wiki"})
         results = await backend.search(query_vec, limit=5)
 
-    Note: This is a stub interface for 2.0. Full implementation
-    will ship in 2.1 with proper connection pooling, index creation,
-    and batch operations.
+        # Or use a cloud URI
+        backend = LanceDBBackend("s3://bucket/vectors")
     """
 
-    def __init__(self, pool, table: str = "agentu_vectors", dimension: int = 384):
-        self._pool = pool
-        self._table = table
-        self._dimension = dimension
+    def __init__(self, db, table_name: str = "agentu_vectors"):
+        self._db = db
+        self._table_name = table_name
+        self._table = None
 
     @classmethod
-    async def create(
+    def create(
         cls,
-        dsn: str,
-        table: str = "agentu_vectors",
-        dimension: int = 384,
-    ) -> "PgVectorBackend":
-        """Create a pgvector backend from a PostgreSQL DSN."""
+        uri: str = "./vectors",
+        table_name: str = "agentu_vectors",
+    ) -> "LanceDBBackend":
+        """Create a LanceDB backend.
+
+        Args:
+            uri: Path to local directory or cloud URI (s3://, gs://, az://).
+            table_name: Name of the vector table.
+        """
         try:
-            import asyncpg
+            import lancedb
         except ImportError:
             raise ImportError(
-                "pgvector support requires 'asyncpg' and 'pgvector'. "
-                "Install with: pip install 'agentu[pgvector]'"
+                "LanceDB support requires the 'lancedb' package. "
+                "Install it with: pip install 'agentu[vectors]'"
             )
 
-        pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+        db = lancedb.connect(uri)
+        return cls(db, table_name)
 
-        # Create table and extension if not exists
-        async with pool.acquire() as conn:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            await conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table} (
-                    key TEXT PRIMARY KEY,
-                    embedding vector({dimension}),
-                    metadata JSONB DEFAULT '{{}}'::jsonb,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            # Create HNSW index for fast ANN search
-            await conn.execute(f"""
-                CREATE INDEX IF NOT EXISTS idx_{table}_embedding
-                ON {table} USING hnsw (embedding vector_cosine_ops)
-            """)
+    def _get_or_create_table(self, embedding: List[float]):
+        """Lazily create the table on first upsert."""
+        if self._table is not None:
+            return self._table
 
-        return cls(pool, table, dimension)
+        try:
+            self._table = self._db.open_table(self._table_name)
+        except Exception:
+            # Table doesn't exist — create with schema from first vector
+            data = [{
+                "key": "__init__",
+                "vector": embedding,
+                "metadata": "{}",
+            }]
+            self._table = self._db.create_table(self._table_name, data=data)
+            # Remove the init row
+            self._table.delete('key = "__init__"')
+
+        return self._table
 
     async def upsert(
         self,
@@ -308,16 +312,26 @@ class PgVectorBackend:
         embedding: List[float],
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        vec_str = f"[{','.join(str(v) for v in embedding)}]"
-        meta_json = json.dumps(metadata or {})
-        async with self._pool.acquire() as conn:
-            await conn.execute(f"""
-                INSERT INTO {self._table} (key, embedding, metadata)
-                VALUES ($1, $2::vector, $3::jsonb)
-                ON CONFLICT (key) DO UPDATE
-                SET embedding = EXCLUDED.embedding,
-                    metadata = EXCLUDED.metadata
-            """, key, vec_str, meta_json)
+        table = self._get_or_create_table(embedding)
+        row = {
+            "key": key,
+            "vector": embedding,
+            "metadata": json.dumps(metadata or {}),
+        }
+        try:
+            (
+                table.merge_insert("key")
+                .when_matched_update_all()
+                .when_not_matched_insert_all()
+                .execute([row])
+            )
+        except Exception:
+            # Fallback: delete + add (older lancedb versions)
+            try:
+                table.delete(f'key = "{key}"')
+            except Exception:
+                pass
+            table.add([row])
 
     async def search(
         self,
@@ -325,37 +339,52 @@ class PgVectorBackend:
         limit: int = 10,
         threshold: float = 0.0,
     ) -> List[Tuple[str, float, Optional[Dict[str, Any]]]]:
-        vec_str = f"[{','.join(str(v) for v in query_embedding)}]"
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(f"""
-                SELECT key,
-                       1 - (embedding <=> $1::vector) AS similarity,
-                       metadata
-                FROM {self._table}
-                WHERE 1 - (embedding <=> $1::vector) >= $2
-                ORDER BY embedding <=> $1::vector
-                LIMIT $3
-            """, vec_str, threshold, limit)
+        try:
+            table = self._get_or_create_table(query_embedding)
+        except Exception:
+            return []
 
-        return [
-            (row["key"], float(row["similarity"]), json.loads(row["metadata"]))
-            for row in rows
-        ]
+        try:
+            results = (
+                table.search(query_embedding)
+                .metric("cosine")
+                .limit(limit)
+                .to_list()
+            )
+        except Exception:
+            return []
+
+        output = []
+        for row in results:
+            # LanceDB returns _distance (lower = more similar for cosine)
+            distance = row.get("_distance", 1.0)
+            similarity = 1.0 - distance
+            if similarity >= threshold:
+                meta_str = row.get("metadata", "{}")
+                meta = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                output.append((row["key"], similarity, meta))
+
+        return output
 
     async def delete(self, key: str) -> bool:
-        async with self._pool.acquire() as conn:
-            result = await conn.execute(
-                f"DELETE FROM {self._table} WHERE key = $1", key
-            )
-            return result == "DELETE 1"
+        try:
+            table = self._get_or_create_table([0.0])
+            table.delete(f'key = "{key}"')
+            return True
+        except Exception:
+            return False
 
     async def count(self) -> int:
-        async with self._pool.acquire() as conn:
-            return await conn.fetchval(f"SELECT COUNT(*) FROM {self._table}")
+        try:
+            table = self._get_or_create_table([0.0])
+            return table.count_rows()
+        except Exception:
+            return 0
 
-    async def close(self):
-        """Close the connection pool."""
-        await self._pool.close()
+    def close(self):
+        """Close the LanceDB connection."""
+        self._db = None
+        self._table = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────

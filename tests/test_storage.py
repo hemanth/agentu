@@ -1,6 +1,5 @@
 """Tests for storage backend abstraction."""
 
-import asyncio
 import pytest
 from agentu.storage import (
     StorageBackend,
@@ -8,7 +7,7 @@ from agentu.storage import (
     InMemoryBackend,
     InMemoryVectorBackend,
     RedisStorageBackend,
-    PgVectorBackend,
+    LanceDBBackend,
     _cosine_similarity,
 )
 
@@ -188,18 +187,17 @@ class TestRedisBackendImport:
             pass  # Connection error is fine — means redis lib exists but server is down
 
 
-class TestPgVectorBackendImport:
-    """Test pgvector backend behavior when asyncpg is not installed."""
+class TestLanceDBBackendImport:
+    """Test LanceDB backend behavior when lancedb is not installed."""
 
-    @pytest.mark.asyncio
-    async def test_create_raises_without_asyncpg(self):
+    def test_create_raises_without_lancedb(self):
         try:
-            backend = await PgVectorBackend.create("postgresql://localhost/test")
-            await backend.close()
+            backend = LanceDBBackend.create("/tmp/test_lance_vectors")
+            backend.close()
         except ImportError as e:
-            assert "agentu[pgvector]" in str(e)
+            assert "agentu[vectors]" in str(e)
         except Exception:
-            pass  # Connection error is fine
+            pass  # If lancedb is installed, creation may succeed
 
 
 class TestAgentWithBackend:
@@ -218,8 +216,8 @@ class TestAgentWithBackend:
 
     def test_with_vectors_url(self):
         from agentu import Agent
-        agent = Agent("test").with_vectors("postgresql://localhost/db")
-        assert agent._vector_dsn == "postgresql://localhost/db"
+        agent = Agent("test").with_vectors("./test_vectors")
+        assert agent._vector_dsn == "./test_vectors"
 
     def test_with_vectors_instance(self):
         from agentu import Agent
@@ -232,7 +230,7 @@ class TestAgentWithBackend:
         agent = (
             Agent("test")
             .with_backend("redis://localhost:6379")
-            .with_vectors("postgresql://localhost/db")
+            .with_vectors("./my_vectors")
         )
         assert agent._backend_url == "redis://localhost:6379"
-        assert agent._vector_dsn == "postgresql://localhost/db"
+        assert agent._vector_dsn == "./my_vectors"

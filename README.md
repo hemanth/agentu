@@ -678,8 +678,8 @@ agent = Agent("bot")
 # Redis — horizontal scaling
 agent = Agent("bot").with_backend("redis://localhost:6379")
 
-# pgvector — production vector search
-agent = Agent("bot").with_vectors("postgresql://localhost/agentu")
+# LanceDB — production vector search (embedded, serverless)
+agent = Agent("bot").with_vectors("./vectors")
 
 # Or bring your own backend
 from agentu import StorageBackend, VectorBackend
@@ -688,7 +688,7 @@ agent = Agent("bot").with_backend(MyCustomBackend())
 
 ```bash
 pip install agentu[redis]      # Redis support
-pip install agentu[pgvector]   # pgvector support
+pip install agentu[vectors]    # LanceDB support
 ```
 
 ## API reference
@@ -707,7 +707,7 @@ agent.with_notifier(["slack://bot-token"])       # notifications
 agent.with_permissions(allow_dangerous=True)     # permission control
 await agent.with_mcp([url])              # MCP servers
 agent.with_backend("redis://...")         # Redis storage backend
-agent.with_vectors("postgresql://...")    # pgvector for semantic search
+agent.with_vectors("./vectors")           # LanceDB for semantic search
 
 # Loop Engineering
 agent.with_schedule(every=30, prompt="...")       # interval schedule

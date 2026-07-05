@@ -19,7 +19,7 @@ from .runtime.redis_backend import RedisSessionStore
 from .storage import (
     StorageBackend, VectorBackend,
     InMemoryBackend, RedisStorageBackend,
-    InMemoryVectorBackend, PgVectorBackend,
+    InMemoryVectorBackend, LanceDBBackend,
 )
 from .runtime.sandbox import SubprocessSandbox, SandboxLimits, SandboxResult, SandboxBackend
 from .eval.eval import evaluate, EvalResult, FailedCase

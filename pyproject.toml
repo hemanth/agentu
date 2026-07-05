@@ -49,8 +49,8 @@ notify = [
 yaml = [
     "PyYAML>=6.0",
 ]
-pgvector = [
-    "asyncpg>=0.29.0",
+vectors = [
+    "lancedb>=0.6.0",
 ]
 otel = [
     "opentelemetry-api>=1.20.0",
