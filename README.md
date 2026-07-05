@@ -72,12 +72,12 @@ When output guardrails fail, the agent retries automatically by feeding the viol
 
 ```python
 agent = Agent("assistant").with_guardrails(
-    output_guardrails=[NoPII(), NoHallucination()],
+    output_guardrails=[PII(), ContentFilter()],
     max_corrections=2,
 )
 
 result = await agent.infer("Summarize the customer data")
-# If the LLM leaks PII, it retries up to 2 times with the violation as feedback
+# If the PII guardrail or ContentFilter trips, it retries up to 2 times with the violation as feedback
 ```
 
 ## Rule files
@@ -559,7 +559,7 @@ agent.with_sandbox(                       # tool isolation
 
 # Guardrails
 agent.with_guardrails(                    # self-correction
-    output_guardrails=[NoPII()],
+    output_guardrails=[PII()],
     max_corrections=2,
 )
 
@@ -592,13 +592,13 @@ await workflow.run()    # execute
 ```bash
 git clone https://github.com/hemanth/agentu && cd agentu
 
-python examples/basic.py                # simple agent
-python examples/workflow.py             # workflows
-python examples/memory.py               # memory system
-python examples/example_sessions.py     # stateful sessions
-python examples/example_eval.py         # agent evaluation
-python examples/example_observe.py      # observability
-python examples/api.py                  # REST API
+python examples/01_basics/basic.py              # simple agent
+python examples/01_basics/memory.py             # memory system
+python examples/03_workflow/workflow.py          # workflows
+python examples/04_server/example_sessions.py   # stateful sessions
+python examples/05_observe/example_eval.py      # agent evaluation
+python examples/05_observe/example_observe.py   # observability
+python examples/04_server/api.py                # REST API
 ```
 
 ## Testing

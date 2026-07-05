@@ -177,6 +177,7 @@ class Agent:
         # Sandbox for tool isolation
         self._sandbox = None
         self._sandbox_limits = None
+        self._worktree_config = None
 
         # Reusable aiohttp session for LLM calls
         self._llm_session: Optional[aiohttp.ClientSession] = None
@@ -1765,6 +1766,35 @@ Example response for calculator:
             "query": user_input, "codemode": self.codemode,
         })
 
+        # Apply worktree isolation if configured
+        worktree_manager = None
+        if self._worktree_config:
+            from ..workflow.worktree import WorktreeManager
+            worktree_manager = WorktreeManager(
+                branch=self._worktree_config.get('branch'),
+                cleanup=self._worktree_config.get('cleanup', True),
+            )
+            worktree_path = await worktree_manager.create(agent_name=self.name)
+            if worktree_path:
+                self.observer.record(
+                    EventType.WORKTREE_CREATE,
+                    metadata={"agent": self.name, "path": worktree_path}
+                )
+
+        try:
+            return await self._infer_inner(user_input, output_schema, images)
+        finally:
+            if worktree_manager:
+                await worktree_manager.remove()
+
+    async def _infer_inner(
+        self,
+        user_input: str,
+        output_schema: Optional[Type] = None,
+        images: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Inner inference logic, separated for worktree wrapping."""
+
         # Load deferred MCP tools on first inference
         if self._pending_mcp_config:
             await self.with_mcp([self._pending_mcp_config])
@@ -2209,7 +2239,7 @@ Example response for calculator:
             agent = _build_subagent(config, self)
 
             # If worktree is enabled, create isolated worktrees
-            if hasattr(self, '_worktree_config') and self._worktree_config:
+            if self._worktree_config:
                 from ..workflow.worktree import WorktreeManager
                 wt = WorktreeManager(
                     cleanup=self._worktree_config.get('cleanup', True)

@@ -5,6 +5,7 @@ Tool functions run in isolation with resource limits.
 """
 
 import json
+import platform
 import asyncio
 import logging
 import tempfile
@@ -95,8 +96,27 @@ class SubprocessSandbox:
             SandboxResult with captured stdout
         """
         try:
+            # Prepend memory limit preamble on POSIX systems
+            exec_code = code
+            if limits.max_memory_mb is not None and platform.system() != "Windows":
+                max_bytes = limits.max_memory_mb * 1024 * 1024
+                preamble = (
+                    "import resource, platform as _plat\n"
+                    "try:\n"
+                    "    _rlimit = resource.RLIMIT_AS if hasattr(resource, 'RLIMIT_AS') "
+                    "and _plat.system() != 'Darwin' else resource.RLIMIT_RSS\n"
+                    f"    _soft, _hard = resource.getrlimit(_rlimit)\n"
+                    f"    _desired = {max_bytes}\n"
+                    "    _new_hard = _hard if _hard != resource.RLIM_INFINITY else _desired\n"
+                    "    _new_soft = min(_desired, _new_hard)\n"
+                    "    resource.setrlimit(_rlimit, (_new_soft, _new_hard))\n"
+                    "except (ValueError, OSError):\n"
+                    "    pass\n"
+                )
+                exec_code = preamble + code
+
             process = await asyncio.create_subprocess_exec(
-                self.python_path, "-c", code,
+                self.python_path, "-c", exec_code,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 # Prevent the subprocess from inheriting signals

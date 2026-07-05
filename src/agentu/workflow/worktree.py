@@ -40,6 +40,7 @@ class WorktreeManager:
         self.cleanup = cleanup
         self.worktree_path: Optional[str] = None
         self._branch_created = False
+        self._auto_branch_name: Optional[str] = None
 
     def _detect_git_root(self) -> Optional[str]:
         """Detect the git repository root."""
@@ -98,6 +99,8 @@ class WorktreeManager:
                     return None
             else:
                 self._branch_created = True
+                if self.branch is None:
+                    self._auto_branch_name = branch_name
 
             self.worktree_path = worktree_dir
             logger.info(f"Created worktree: {worktree_dir} (branch: {branch_name})")
@@ -135,10 +138,19 @@ class WorktreeManager:
                 logger.warning(f"Failed to remove worktree: {result.stderr}")
 
             # Clean up the branch if we created it
-            if self._branch_created and self.branch is None:
-                # Extract branch name from the worktree path
+            if self._branch_created and self.branch is None and self._auto_branch_name:
                 # We don't delete user-specified branches
-                pass
+                branch_result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["git", "branch", "-D", self._auto_branch_name],
+                    capture_output=True, text=True, timeout=30,
+                    cwd=git_root
+                )
+                if branch_result.returncode == 0:
+                    logger.info(f"Deleted auto-created branch: {self._auto_branch_name}")
+                else:
+                    logger.warning(f"Failed to delete branch {self._auto_branch_name}: {branch_result.stderr}")
+                self._auto_branch_name = None
 
             self.worktree_path = None
 
