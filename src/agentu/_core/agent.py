@@ -245,6 +245,9 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         self._vector_dsn: Optional[str] = None
         self._vector_dimension: int = 384
 
+        # Active session (set by Session.__post_init__ for auto-checkpoint)
+        self._active_session = None
+
 
 
     @classmethod
@@ -2130,6 +2133,25 @@ Example response for calculator:
 
             tool_name = evaluation["selected_tool"]
             parameters = evaluation["parameters"]
+
+            # ── Write-ahead checkpoint ──────────────────────────
+            # Save state BEFORE tool execution so mid-call crashes
+            # can be recovered.  The checkpoint includes completed
+            # turns and the tool about to be executed.
+            session = self._active_session
+            if session and getattr(session, 'auto_checkpoint', False):
+                pending_state = {
+                    "user_input": user_input,
+                    "turn": turn + 1,
+                    "completed_turns": list(turn_history),
+                    "pending_tool": tool_name,
+                    "pending_parameters": parameters,
+                    "additional_tools": evaluation.get("additional_tools", []),
+                }
+                session.checkpoint(
+                    store=getattr(session, '_checkpoint_store', None),
+                    pending_tool_calls=pending_state,
+                )
 
             # Execute the tool call(s)
             # Support parallel tool calls if the model returns additional_tools

@@ -517,3 +517,197 @@ class TestVectorBackendIntegration:
         agent = _make_agent(enable_memory=True).with_vectors(backend)
         result = agent._recall_from_vector_backend("query", limit=5, threshold=0.0)
         assert result == []
+
+
+# ── Write-ahead checkpoint tests ─────────────────────────
+
+class TestWriteAheadCheckpoint:
+    """Tests for mid-tool-call checkpoint/resume."""
+
+    def test_checkpoint_data_was_interrupted_false_by_default(self):
+        """Clean checkpoints have was_interrupted == False."""
+        from agentu.runtime.checkpoint import CheckpointData
+        cp = CheckpointData(
+            session_id="s1", agent_name="bot",
+            conversation_history=[], metadata={},
+            turn_count=0, created_at=0.0, checkpointed_at=1.0,
+        )
+        assert cp.was_interrupted is False
+        assert cp.pending_tool_calls is None
+
+    def test_checkpoint_data_was_interrupted_true(self):
+        """Checkpoints with pending_tool_calls have was_interrupted == True."""
+        from agentu.runtime.checkpoint import CheckpointData
+        pending = {
+            "user_input": "search for cats",
+            "turn": 1,
+            "completed_turns": [],
+            "pending_tool": "web_search",
+            "pending_parameters": {"query": "cats"},
+        }
+        cp = CheckpointData(
+            session_id="s1", agent_name="bot",
+            conversation_history=[], metadata={},
+            turn_count=1, created_at=0.0, checkpointed_at=1.0,
+            pending_tool_calls=pending,
+        )
+        assert cp.was_interrupted is True
+        assert cp.pending_tool_calls["pending_tool"] == "web_search"
+
+    def test_checkpoint_data_from_dict_without_pending(self):
+        """from_dict handles old checkpoints without pending_tool_calls."""
+        from agentu.runtime.checkpoint import CheckpointData
+        old_data = {
+            "session_id": "s1", "agent_name": "bot",
+            "conversation_history": [], "metadata": {},
+            "turn_count": 0, "created_at": 0.0,
+            "checkpointed_at": 1.0, "parent_session_id": None,
+        }
+        cp = CheckpointData.from_dict(old_data)
+        assert cp.pending_tool_calls is None
+        assert cp.was_interrupted is False
+
+    def test_checkpoint_data_roundtrip(self):
+        """to_dict → from_dict preserves pending_tool_calls."""
+        from agentu.runtime.checkpoint import CheckpointData
+        pending = {"pending_tool": "calc", "turn": 2, "completed_turns": []}
+        cp = CheckpointData(
+            session_id="s1", agent_name="bot",
+            conversation_history=[], metadata={},
+            turn_count=1, created_at=0.0, checkpointed_at=1.0,
+            pending_tool_calls=pending,
+        )
+        restored = CheckpointData.from_dict(cp.to_dict())
+        assert restored.was_interrupted is True
+        assert restored.pending_tool_calls["pending_tool"] == "calc"
+
+    def test_checkpoint_store_save_load_with_pending(self, tmp_path):
+        """SQLite store persists and restores pending_tool_calls."""
+        from agentu.runtime.checkpoint import CheckpointData, CheckpointStore
+        db_path = str(tmp_path / "test.db")
+        store = CheckpointStore(db_path=db_path)
+
+        pending = {
+            "user_input": "search",
+            "turn": 1,
+            "completed_turns": [],
+            "pending_tool": "web_search",
+            "pending_parameters": {"q": "test"},
+        }
+        cp = CheckpointData(
+            session_id="s-pending", agent_name="bot",
+            conversation_history=[], metadata={"key": "val"},
+            turn_count=1, created_at=0.0, checkpointed_at=1.0,
+            pending_tool_calls=pending,
+        )
+        store.save(cp)
+
+        loaded = store.load("s-pending")
+        assert loaded is not None
+        assert loaded.was_interrupted is True
+        assert loaded.pending_tool_calls["pending_tool"] == "web_search"
+        assert loaded.pending_tool_calls["pending_parameters"] == {"q": "test"}
+        store.close()
+
+    def test_checkpoint_store_save_load_without_pending(self, tmp_path):
+        """SQLite store handles clean checkpoints (no pending)."""
+        from agentu.runtime.checkpoint import CheckpointData, CheckpointStore
+        db_path = str(tmp_path / "test.db")
+        store = CheckpointStore(db_path=db_path)
+
+        cp = CheckpointData(
+            session_id="s-clean", agent_name="bot",
+            conversation_history=[], metadata={},
+            turn_count=2, created_at=0.0, checkpointed_at=1.0,
+        )
+        store.save(cp)
+
+        loaded = store.load("s-clean")
+        assert loaded is not None
+        assert loaded.was_interrupted is False
+        assert loaded.pending_tool_calls is None
+        store.close()
+
+    def test_session_auto_checkpoint_default_off(self):
+        """Sessions have auto_checkpoint disabled by default."""
+        from agentu.runtime.session import Session
+        agent = _make_agent()
+        session = Session(session_id="s1", agent=agent)
+        assert session.auto_checkpoint is False
+
+    def test_session_enable_auto_checkpoint(self):
+        """enable_auto_checkpoint sets the flag and returns self."""
+        from agentu.runtime.session import Session
+        agent = _make_agent()
+        session = Session(session_id="s1", agent=agent)
+        result = session.enable_auto_checkpoint()
+        assert result is session
+        assert session.auto_checkpoint is True
+
+    def test_session_links_to_agent(self):
+        """Session.__post_init__ sets agent._active_session."""
+        from agentu.runtime.session import Session
+        agent = _make_agent()
+        session = Session(session_id="s1", agent=agent)
+        assert agent._active_session is session
+
+    def test_agent_has_active_session_none_by_default(self):
+        """Agent._active_session is None before any session is created."""
+        agent = _make_agent()
+        assert agent._active_session is None
+
+    def test_checkpoint_with_pending_tool_calls(self):
+        """Session.checkpoint() passes pending_tool_calls to CheckpointData."""
+        from agentu.runtime.session import Session
+        from agentu.runtime.checkpoint import CheckpointStore
+        import tempfile, os
+        agent = _make_agent(enable_memory=True)
+        session = Session(session_id="s-test", agent=agent)
+
+        pending = {"pending_tool": "calculator", "turn": 1}
+        with tempfile.TemporaryDirectory() as d:
+            store = CheckpointStore(db_path=os.path.join(d, "cp.db"))
+            cp = session.checkpoint(store=store, pending_tool_calls=pending)
+            assert cp.was_interrupted is True
+            assert cp.pending_tool_calls["pending_tool"] == "calculator"
+
+            # Load back
+            loaded = store.load("s-test")
+            assert loaded.was_interrupted is True
+            store.close()
+
+    def test_resume_detects_interrupted_session(self):
+        """SessionManager.resume() sets metadata on interrupted sessions."""
+        from agentu.runtime.session import Session, SessionManager
+        from agentu.runtime.checkpoint import CheckpointData, CheckpointStore
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as d:
+            store = CheckpointStore(db_path=os.path.join(d, "cp.db"))
+
+            # Save an interrupted checkpoint
+            pending = {
+                "user_input": "what is 2+2",
+                "turn": 1,
+                "completed_turns": [],
+                "pending_tool": "calculator",
+                "pending_parameters": {"expr": "2+2"},
+            }
+            cp = CheckpointData(
+                session_id="s-crash", agent_name="bot",
+                conversation_history=[], metadata={},
+                turn_count=1, created_at=0.0, checkpointed_at=1.0,
+                pending_tool_calls=pending,
+            )
+            store.save(cp)
+
+            # Resume it
+            manager = SessionManager()
+            agent = _make_agent(enable_memory=True)
+            session = manager.resume("s-crash", agent, store=store)
+            assert session is not None
+            assert session.metadata.get('_interrupted') is True
+            assert session.metadata.get('_interrupted_tool') == "calculator"
+            assert session.metadata.get('_interrupted_turn') == 1
+            store.close()
+

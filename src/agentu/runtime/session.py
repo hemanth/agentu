@@ -26,6 +26,10 @@ class Session:
     - Persistent memory
     - Agent state
     - Metadata (user_id, tags, etc.)
+
+    When ``auto_checkpoint`` is enabled, the agent automatically
+    checkpoints state before each tool call, so mid-tool-call crashes
+    can be recovered via ``SessionManager.resume()``.
     """
     session_id: str
     agent:Agent
@@ -33,6 +37,10 @@ class Session:
     last_accessed: float = field(default_factory=time.time)
     metadata: Dict[str, Any] = field(default_factory=dict)
     turn_count: int = 0
+    auto_checkpoint: bool = False
+    _checkpoint_store: Optional[CheckpointStore] = field(
+        default=None, repr=False,
+    )
     
     def __post_init__(self):
         """Initialize session with memory enabled."""
@@ -45,6 +53,30 @@ class Session:
                 use_sqlite=True,
                 storage_path=storage_path,
             )
+        # Link the session to the agent so _infer_inner can find it
+        self.agent._active_session = self
+
+    def enable_auto_checkpoint(
+        self,
+        store: Optional[CheckpointStore] = None,
+    ) -> "Session":
+        """Enable write-ahead checkpointing before each tool call.
+
+        When enabled, a checkpoint is saved before each tool execution
+        during ``infer()``. If the process crashes mid-tool-call, the
+        checkpoint contains the in-flight state (which tool was about
+        to run, completed turns so far) so ``resume()`` can recover.
+
+        Args:
+            store: ``CheckpointStore`` to persist to. Defaults to the
+                session's existing store or a SQLite store.
+
+        Returns:
+            Self for chaining.
+        """
+        self.auto_checkpoint = True
+        self._checkpoint_store = store
+        return self
     
     async def send(self, message: str) -> Dict[str, Any]:
         """Send a message in this session.
@@ -62,6 +94,10 @@ class Session:
         
         # Agent's infer() method already stores in memory
         response = await self.agent.infer(message)
+
+        # Clean checkpoint after successful turn (no pending state)
+        if self.auto_checkpoint:
+            self.checkpoint(store=self._checkpoint_store)
         
         # Add session metadata to response
         response['session_info'] = {
@@ -110,6 +146,7 @@ class Session:
         self,
         store: Optional["CheckpointStore"] = None,
         fork: bool = False,
+        pending_tool_calls: Optional[Dict[str, Any]] = None,
     ) -> "CheckpointData":
         """Serialise current session state to a checkpoint.
 
@@ -123,6 +160,9 @@ class Session:
                 session ID (a fork), and the returned data has a fresh
                 ``session_id`` with ``parent_session_id`` pointing back
                 to the original.
+            pending_tool_calls: In-flight tool call state for
+                write-ahead checkpoints. Set automatically by the
+                inference loop when ``auto_checkpoint`` is enabled.
 
         Returns:
             The persisted ``CheckpointData``.
@@ -155,6 +195,7 @@ class Session:
             created_at=self.created_at,
             checkpointed_at=time.time(),
             parent_session_id=parent_id,
+            pending_tool_calls=pending_tool_calls,
         )
 
         # Persist to storage backend if available, else default store
@@ -359,12 +400,30 @@ class SessionManager:
                 entry = MemoryEntry.from_dict(entry_dict)
                 agent.memory.short_term.entries.append(entry)
 
+        # Detect interrupted checkpoint (mid-tool-call crash)
+        if data.was_interrupted:
+            pending = data.pending_tool_calls
+            session.metadata['_interrupted'] = True
+            session.metadata['_interrupted_tool'] = pending.get('pending_tool')
+            session.metadata['_interrupted_turn'] = pending.get('turn')
+            session.metadata['_completed_turns'] = pending.get('completed_turns', [])
+            logger.warning(
+                "Session %s was interrupted mid-tool-call "
+                "(tool=%s, turn=%d, %d completed turns). "
+                "The interrupted tool call was NOT executed.",
+                session_id,
+                pending.get('pending_tool'),
+                pending.get('turn', 0),
+                len(pending.get('completed_turns', [])),
+            )
+
         self.sessions[session_id] = session
         logger.info(
-            "Resumed session %s (%d turns, %d history entries)",
+            "Resumed session %s (%d turns, %d history entries%s)",
             session_id,
             data.turn_count,
             len(data.conversation_history),
+            ", INTERRUPTED" if data.was_interrupted else "",
         )
         return session
     

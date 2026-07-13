@@ -29,6 +29,10 @@ class CheckpointData:
         created_at: Epoch when the *session* was originally created.
         checkpointed_at: Epoch when this checkpoint was taken.
         parent_session_id: If this was forked, the ID of the source session.
+        pending_tool_calls: In-flight tool call state at time of checkpoint.
+            Present when auto-checkpoint fires before a tool call. Contains
+            the user query, completed turn history, and the tool about to
+            be executed. ``None`` for clean (between-turn) checkpoints.
     """
 
     session_id: str
@@ -39,6 +43,12 @@ class CheckpointData:
     created_at: float
     checkpointed_at: float
     parent_session_id: Optional[str] = None
+    pending_tool_calls: Optional[Dict[str, Any]] = None
+
+    @property
+    def was_interrupted(self) -> bool:
+        """True if this checkpoint captured mid-tool-call state."""
+        return self.pending_tool_calls is not None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to a plain dictionary."""
@@ -47,6 +57,9 @@ class CheckpointData:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CheckpointData":
         """Reconstruct from a dictionary."""
+        # Handle checkpoints saved before pending_tool_calls existed
+        if 'pending_tool_calls' not in data:
+            data['pending_tool_calls'] = None
         return cls(**data)
 
 
@@ -84,7 +97,8 @@ class CheckpointStore:
                 turn_count      INTEGER NOT NULL DEFAULT 0,
                 created_at      REAL    NOT NULL,
                 checkpointed_at REAL    NOT NULL,
-                parent_session_id TEXT
+                parent_session_id TEXT,
+                pending_tool_calls TEXT
             )
         """)
         cursor.execute("""
@@ -95,6 +109,13 @@ class CheckpointStore:
             CREATE INDEX IF NOT EXISTS idx_cp_checkpointed_at
             ON checkpoints(checkpointed_at DESC)
         """)
+        # Migrate existing tables that lack the new column
+        try:
+            cursor.execute(
+                "ALTER TABLE checkpoints ADD COLUMN pending_tool_calls TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         self.conn.commit()
 
     # ── public API ──────────────────────────────────────────
@@ -114,8 +135,9 @@ class CheckpointStore:
                 """
                 INSERT INTO checkpoints
                     (session_id, agent_name, conversation, metadata,
-                     turn_count, created_at, checkpointed_at, parent_session_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     turn_count, created_at, checkpointed_at,
+                     parent_session_id, pending_tool_calls)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data.session_id,
@@ -126,14 +148,16 @@ class CheckpointStore:
                     data.created_at,
                     data.checkpointed_at,
                     data.parent_session_id,
+                    json.dumps(data.pending_tool_calls) if data.pending_tool_calls else None,
                 ),
             )
             self.conn.commit()
             row_id = cursor.lastrowid
             logger.info(
-                "Saved checkpoint for session %s (row %d)",
+                "Saved checkpoint for session %s (row %d%s)",
                 data.session_id,
                 row_id,
+                ", pending_tool" if data.pending_tool_calls else "",
             )
             return row_id  # type: ignore[return-value]
         except Exception:
@@ -155,7 +179,8 @@ class CheckpointStore:
         cursor.execute(
             """
             SELECT session_id, agent_name, conversation, metadata,
-                   turn_count, created_at, checkpointed_at, parent_session_id
+                   turn_count, created_at, checkpointed_at,
+                   parent_session_id, pending_tool_calls
             FROM checkpoints
             WHERE session_id = ?
             ORDER BY checkpointed_at DESC
@@ -167,6 +192,9 @@ class CheckpointStore:
         if row is None:
             return None
 
+        pending_raw = row["pending_tool_calls"]
+        pending = json.loads(pending_raw) if pending_raw else None
+
         return CheckpointData(
             session_id=row["session_id"],
             agent_name=row["agent_name"],
@@ -176,6 +204,7 @@ class CheckpointStore:
             created_at=row["created_at"],
             checkpointed_at=row["checkpointed_at"],
             parent_session_id=row["parent_session_id"],
+            pending_tool_calls=pending,
         )
 
     def list_checkpoints(
