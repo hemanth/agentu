@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentu"
-version = "2.0.0"
+version = "2.1.0"
 description = "A harness-engineered AI agent runtime with tool isolation, self-correction, and permission scoping"
 readme = "README.md"
 authors = [
