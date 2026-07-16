@@ -248,6 +248,9 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         # Active session (set by Session.__post_init__ for auto-checkpoint)
         self._active_session = None
 
+        # Workspace path (set by from_workspace)
+        self._workspace_path: Optional[str] = None
+
 
 
     @classmethod
@@ -286,6 +289,72 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         if cfg.mcp and cfg.mcp.urls:
             await agent.with_mcp(cfg.mcp.urls)
             
+        return agent
+
+    @classmethod
+    async def from_workspace(cls, workspace_path: str = '.agentu') -> 'Agent':
+        """Load an agent from a workspace directory.
+
+        Reads ``agent.yaml`` for configuration, discovers tools from
+        ``tools/``, and loads context from ``context/`` files.
+
+        Args:
+            workspace_path: Path to the workspace directory.
+                Defaults to ``.agentu/`` in the current directory.
+
+        Returns:
+            A fully configured Agent instance.
+
+        Example:
+            >>> agent = await Agent.from_workspace('.agentu/')
+            >>> # or with custom path
+            >>> agent = await Agent.from_workspace('/path/to/workspace')
+        """
+        from ..workspace import load_workspace
+
+        config, tools, context = load_workspace(workspace_path)
+
+        agent = cls(
+            name=config.name,
+            model=config.model,
+            temperature=config.temperature,
+            max_turns=config.max_turns,
+            api_base=config.api_base,
+            api_key=config.api_key,
+            enable_memory=config.enable_memory,
+            memory_path=config.memory_path,
+            short_term_size=config.short_term_size,
+            codemode=config.codemode,
+            cache=config.cache,
+            cache_ttl=config.cache_ttl,
+        )
+
+        # Set workspace path for future reference
+        agent._workspace_path = workspace_path
+
+        # Add discovered tools
+        for tool in tools:
+            agent._add_tool_internal(tool)
+
+        # Set context from context files + inline system_prompt
+        context_parts = []
+        if config.system_prompt:
+            context_parts.append(config.system_prompt)
+        if context:
+            context_parts.append(context)
+        if context_parts:
+            agent.context = '\n\n'.join(context_parts)
+
+        # Apply storage backends
+        if config.backend_url:
+            agent.with_backend(config.backend_url)
+        if config.vectors_path:
+            agent.with_vectors(config.vectors_path)
+
+        # Apply permissions
+        if config.permissions:
+            agent.with_permissions(**config.permissions)
+
         return agent
         
     def _add_tool_internal(self, tool: Union[Tool, Callable], deferred: bool = False) -> Tool:
