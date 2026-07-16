@@ -5,6 +5,47 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-07-16
+
+### Added
+
+- **Workspace — filesystem-first agent loading**
+  - `Agent.from_workspace(".agentu/")` — load agent from a directory with `agent.yaml`
+  - Tool discovery: drop `.py` files in `tools/`, public functions with docstrings become tools
+  - Context loading: point at markdown files, they're added to the system prompt
+  - System prompt: inline string or `file: ./prompt.md`
+  - All `with_*()` chaining still works on top of workspace-loaded agents
+  - `WorkspaceConfig` dataclass for parsed YAML configuration
+  - `discover_tools()`, `load_context_files()`, `load_workspace()` public functions
+  - 36 new tests across 5 test classes
+
+## [2.1.0] - 2026-07-14
+
+### Added
+
+- **Write-ahead checkpointing for mid-tool-call crash recovery**
+  - `session.enable_auto_checkpoint()` — checkpoint before each tool call
+  - `CheckpointData.was_interrupted` property — detect mid-tool-call crashes on resume
+  - `CheckpointData.pending_tool_calls` field — captures in-flight tool state
+  - `SessionManager.resume()` exposes interrupted tool name and completed turns in metadata
+  - SQLite schema auto-migration for `pending_tool_calls` column
+  - WAL pattern: log intent before action, recover from the log
+  - 12 new tests in `TestWriteAheadCheckpoint`
+
+## [2.0.0] - 2026-07-06
+
+### Changed
+
+- **Architecture overhaul — god object decomposition**
+  - Agent decomposed into 6 focused mixins: `MemoryMixin`, `StorageMixin`, `SandboxMixin`, `HooksMixin`, `ContextMixin`, `WorkflowMixin`
+  - `agent.py`: 3,092 → 2,332 lines (25% reduction)
+  - `with_vectors()` wired into `remember()` + `recall(semantic=True)`
+  - `with_backend()` wired into `checkpoint()` + `resume()` + `serve()`
+  - All `with_*()` methods return `Agent` for chaining
+  - Fixed async vector backend crash inside event loops
+  - Removed duplicate methods across mixins
+
+
 ## [1.20.0] - 2026-06-28
 
 ### Added

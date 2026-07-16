@@ -692,6 +692,58 @@ pip install agentu[redis]      # Redis support
 pip install agentu[vectors]    # LanceDB support
 ```
 
+## Workspace
+
+Load an agent from a `.agentu/` directory instead of Python code:
+
+```yaml
+# .agentu/agent.yaml
+name: researcher
+model: gemini-2.5-flash
+temperature: 0.3
+system_prompt: "You are a research assistant."
+
+tools:
+  discover: ./tools    # auto-discover .py files
+
+context:
+  files:
+    - ./context/readme.md
+    - ./context/api-docs.md
+
+backend:
+  storage: redis://localhost:6379
+  vectors: ./vectors
+
+memory:
+  enabled: true
+  short_term_size: 20
+
+permissions:
+  allow_dangerous: true
+```
+
+```python
+agent = await Agent.from_workspace(".agentu/")
+```
+
+`from_workspace()` returns a normal `Agent` — chain on top for runtime config:
+
+```python
+agent = (await Agent.from_workspace(".agentu/"))
+agent.with_hooks(on_tool_call=audit_log).with_schedule(every=30, prompt="check feeds")
+```
+
+Drop a `.py` file in `tools/` — any public function with a docstring becomes a tool:
+
+```python
+# .agentu/tools/sentiment.py
+def analyze_sentiment(text: str) -> dict:
+    """Analyze the sentiment of the given text."""
+    # Tool auto-discovered on startup
+    ...
+```
+
 ## API reference
 
 ```python
@@ -709,6 +761,7 @@ agent.with_permissions(allow_dangerous=True)     # permission control
 await agent.with_mcp([url])              # MCP servers
 agent.with_backend("redis://...")         # Redis storage backend
 agent.with_vectors("./vectors")           # LanceDB for remember() + recall(semantic=True)
+agent = await Agent.from_workspace(".agentu/")  # load from workspace directory
 
 # Loop Engineering
 agent.with_schedule(every=30, prompt="...")       # interval schedule
