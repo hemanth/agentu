@@ -38,6 +38,7 @@ def test_schema_parsing(test_yaml_path):
 @pytest.mark.asyncio
 async def test_agent_from_config_factory(test_yaml_path):
     """Test that Agent.from_config parses the schema and applies the builders."""
+    pytest.importorskip("apprise", reason="apprise not installed")
     agent = await Agent.from_config(test_yaml_path)
     
     # Base attributes
