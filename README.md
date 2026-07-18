@@ -252,6 +252,22 @@ result = await workflow.run(checkpoint="./checkpoints", workflow_id="my-report")
 await resume_workflow(result["checkpoint_path"])
 ```
 
+### Agents as tools
+
+Give an orchestrator access to specialist agents. The LLM decides the workflow dynamically — no graph framework needed:
+
+```python
+researcher = Agent("researcher").with_tools([search])
+analyst = Agent("analyst").with_tools([analyze])
+writer = Agent("writer").with_tools([summarize])
+
+# The LLM routes between agents based on the goal
+orchestrator = Agent("planner").with_agents([researcher, analyst, writer])
+result = await orchestrator.infer("Research AI coding tools, analyze trends, write a report")
+```
+
+Each child agent becomes a callable tool (`call_researcher`, `call_analyst`, `call_writer`). The orchestrator's LLM decides when to call which agent, enabling sequential, parallel, conditional, and looping workflows through its own reasoning.
+
 ## Caching
 
 Cache LLM responses to skip redundant API calls. Works with both plain strings and full conversations.
@@ -802,6 +818,7 @@ agent.with_backend("redis://...")         # Redis storage backend
 agent.with_vectors("./vectors")           # LanceDB for remember() + recall(semantic=True)
 agent.with_consolidation(every=30)        # background memory consolidation
 agent.with_inbox("./inbox")              # file watcher → auto-ingest
+agent.with_agents([a1, a2])              # agents as callable tools
 agent = await Agent.from_workspace(".agentu/")  # load from workspace directory
 
 # Loop Engineering

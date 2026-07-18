@@ -49,6 +49,67 @@ class WorkflowMixin:
         logger.info(f"Loaded {len(self._subagent_configs)} sub-agent configs")
         return self
 
+    def with_agents(
+        self,
+        agents: List[Any],
+    ) -> 'Agent':
+        """Give this agent access to other agents as callable tools.
+
+        Each child agent becomes a tool named ``call_{agent.name}``.
+        The orchestrator LLM decides when to call which agent,
+        enabling dynamic workflows without explicit graph definitions.
+
+        Args:
+            agents: List of Agent instances to expose as tools.
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> researcher = Agent("researcher").with_tools([search])
+            >>> writer = Agent("writer").with_tools([summarize])
+            >>> orchestrator = Agent("planner").with_agents([researcher, writer])
+            >>> result = await orchestrator.infer("Research and write a report")
+        """
+        from .tools import Tool
+
+        for agent in agents:
+            tool_names = ", ".join(t.name for t in getattr(agent, 'tools', []))
+            agent_name = getattr(agent, 'name', str(agent))
+            agent_desc = (
+                getattr(agent, 'system_prompt', '') or
+                f"Agent '{agent_name}' with tools: {tool_names}"
+            )
+            # Truncate description to keep tool schema compact
+            if len(agent_desc) > 200:
+                agent_desc = agent_desc[:197] + "..."
+
+            async def _call_agent(task: str, _agent=agent) -> str:
+                return await _agent.infer(task)
+
+            _call_agent.__name__ = f"call_{agent_name}"
+            _call_agent.__doc__ = (
+                f"Delegate a task to the {agent_name} agent.\n\n"
+                f"{agent_desc}\n\n"
+                f"Args:\n"
+                f"    task: What to ask {agent_name} to do.\n\n"
+                f"Returns:\n"
+                f"    The agent's response."
+            )
+
+            self._add_tool_internal(Tool(_call_agent))
+
+        if not hasattr(self, '_child_agents'):
+            self._child_agents = []
+        self._child_agents.extend(agents)
+
+        logger.info(
+            f"Added {len(agents)} agent(s) as tools: "
+            f"{[getattr(a, 'name', '?') for a in agents]}"
+        )
+        return self
+
+
     def with_worktree(
         self,
         branch: Optional[str] = None,
