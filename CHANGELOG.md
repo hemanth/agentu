@@ -4,6 +4,15 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.3.1] - 2026-07-18
+
+### Changed
+
+- **README**: Expanded Memory section with structured extraction, consolidation, and inbox examples
+- **README**: Added `with_consolidation()` and `with_inbox()` to API reference
+- **Codelabs**: New `06_memory/` chapter with `always_on_memory.py` and `workspace_agent.py`
+- **Codelabs**: Updated `01_basics/memory.py` to show auto-extraction alongside classic pattern
+
 ## [2.3.0] - 2026-07-18
 
 ### Added
