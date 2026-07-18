@@ -4,6 +4,20 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.3.0] - 2026-07-18
+
+### Added
+
+- **Always-on memory patterns** (inspired by [Google's always-on-memory-agent](https://github.com/GoogleCloudPlatform/generative-ai/tree/main/gemini/agents/always-on-memory-agent)):
+  - **Structured memory extraction** — `MemoryEntry` now carries `summary`, `entities`, `topics`, `source`, and `consolidated` fields. The LLM auto-extracts these on every `remember()` call by default. No manual tagging needed.
+  - **Background consolidation** — `agent.with_consolidation(every=30)` runs a timer that reviews unconsolidated memories, finds cross-cutting patterns, and stores synthesized insights. Like the brain during sleep.
+  - **Inbox file watcher** — `agent.with_inbox("./inbox")` polls a directory for new files, processes them via the agent, and moves them to `.processed/`. Workspace-configurable via `inbox.watch` in `agent.yaml`.
+  - Auto-extraction skips `conversation`-type memories (chat turns don't need it)
+  - Disable with `Agent(..., auto_extract_memory=False)` if you want raw storage
+  - `consolidate_memories` tool injected automatically when consolidation is enabled
+  - Workspace support: `inbox.watch`, `inbox.poll_interval` in `agent.yaml`
+  - 14 new tests across 3 test classes
+
 
 ## [2.2.0] - 2026-07-16
 

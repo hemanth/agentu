@@ -5,7 +5,7 @@ import json
 import math
 import time
 from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 import logging
 
@@ -31,6 +31,11 @@ class MemoryEntry:
     importance: float = 0.5  # 0.0 to 1.0, used for memory consolidation
     access_count: int = 0
     last_accessed: float = 0.0
+    summary: Optional[str] = None          # LLM-extracted short summary
+    entities: List[str] = field(default_factory=list)  # people, orgs, concepts
+    topics: List[str] = field(default_factory=list)    # topic tags
+    source: Optional[str] = None           # where it came from (file, url, etc)
+    consolidated: bool = False             # has consolidation processed this?
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -39,6 +44,11 @@ class MemoryEntry:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'MemoryEntry':
         """Create from dictionary."""
+        data.setdefault('summary', None)
+        data.setdefault('entities', [])
+        data.setdefault('topics', [])
+        data.setdefault('source', None)
+        data.setdefault('consolidated', False)
         return cls(**data)
 
 
@@ -55,7 +65,9 @@ class ShortTermMemory:
         self.entries: List[MemoryEntry] = []
 
     def add(self, content: str, memory_type: str = 'conversation',
-            metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5) -> MemoryEntry:
+            metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
+            summary: Optional[str] = None, entities: Optional[List[str]] = None,
+            topics: Optional[List[str]] = None, source: Optional[str] = None) -> MemoryEntry:
         """Add entry to short-term memory.
 
         Args:
@@ -63,6 +75,10 @@ class ShortTermMemory:
             memory_type: Type of memory ('conversation', 'fact', 'task', 'observation')
             metadata: Additional metadata
             importance: Importance score (0.0 to 1.0)
+            summary: Optional short summary
+            entities: Optional list of entities
+            topics: Optional list of topics
+            source: Optional source identifier
 
         Returns:
             The created MemoryEntry
@@ -73,7 +89,11 @@ class ShortTermMemory:
             metadata=metadata or {},
             memory_type=memory_type,
             importance=importance,
-            last_accessed=time.time()
+            last_accessed=time.time(),
+            summary=summary,
+            entities=entities or [],
+            topics=topics or [],
+            source=source
         )
 
         self.entries.append(entry)
@@ -138,7 +158,9 @@ class LongTermMemory:
             self.load()
 
     def add(self, content: str, memory_type: str = 'fact',
-            metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5) -> MemoryEntry:
+            metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
+            summary: Optional[str] = None, entities: Optional[List[str]] = None,
+            topics: Optional[List[str]] = None, source: Optional[str] = None) -> MemoryEntry:
         """Add entry to long-term memory.
 
         Args:
@@ -146,6 +168,10 @@ class LongTermMemory:
             memory_type: Type of memory
             metadata: Additional metadata
             importance: Importance score (0.0 to 1.0)
+            summary: Optional short summary
+            entities: Optional list of entities
+            topics: Optional list of topics
+            source: Optional source identifier
 
         Returns:
             The created MemoryEntry
@@ -156,7 +182,11 @@ class LongTermMemory:
             metadata=metadata or {},
             memory_type=memory_type,
             importance=importance,
-            last_accessed=time.time()
+            last_accessed=time.time(),
+            summary=summary,
+            entities=entities or [],
+            topics=topics or [],
+            source=source
         )
 
         self.entries.append(entry)
@@ -407,7 +437,9 @@ class Memory:
 
     def remember(self, content: str, memory_type: str = 'conversation',
                 metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
-                store_long_term: bool = False) -> MemoryEntry:
+                store_long_term: bool = False, summary: Optional[str] = None,
+                entities: Optional[List[str]] = None, topics: Optional[List[str]] = None,
+                source: Optional[str] = None) -> MemoryEntry:
         """Store a memory.
 
         Args:
@@ -416,16 +448,28 @@ class Memory:
             metadata: Additional metadata
             importance: Importance score (0.0 to 1.0)
             store_long_term: If True, store directly in long-term memory
+            summary: Optional short summary
+            entities: Optional list of entities
+            topics: Optional list of topics
+            source: Optional source identifier
 
         Returns:
             The created MemoryEntry
         """
         # Always add to short-term
-        entry = self.short_term.add(content, memory_type, metadata, importance)
+        entry = self.short_term.add(
+            content=content, memory_type=memory_type, metadata=metadata,
+            importance=importance, summary=summary, entities=entities,
+            topics=topics, source=source
+        )
 
         # Add to long-term if important or explicitly requested
         if store_long_term or importance >= 0.7:
-            lt_entry = self.long_term.add(content, memory_type, metadata, importance)
+            lt_entry = self.long_term.add(
+                content=content, memory_type=memory_type, metadata=metadata,
+                importance=importance, summary=summary, entities=entities,
+                topics=topics, source=source
+            )
             # Eagerly index the new entry if an embedding provider is set
             if self.embedding_provider is not None:
                 try:

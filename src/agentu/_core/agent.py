@@ -355,6 +355,10 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         if config.permissions:
             agent.with_permissions(**config.permissions)
 
+        # Apply inbox
+        if config.inbox_path:
+            agent.with_inbox(config.inbox_path, config.inbox_poll_interval)
+
         return agent
         
     def _add_tool_internal(self, tool: Union[Tool, Callable], deferred: bool = False) -> Tool:

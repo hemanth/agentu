@@ -77,6 +77,10 @@ class WorkspaceConfig:
     backend_url: Optional[str] = None  # redis://...
     vectors_path: Optional[str] = None  # ./vectors
 
+    # Inbox
+    inbox_path: Optional[str] = None
+    inbox_poll_interval: int = 5
+
     # Hooks
     permissions: Optional[Dict[str, Any]] = None  # allow_dangerous, etc.
 
@@ -171,6 +175,16 @@ def parse_agent_yaml(path: str) -> WorkspaceConfig:
     # ---- permissions ----------------------------------------------------
     permissions = raw.get("permissions") or None
 
+    # ---- inbox ----------------------------------------------------------
+    inbox = raw.get('inbox', {})
+    inbox_path = None
+    inbox_poll_interval = 5
+    if inbox:
+        inbox_watch = inbox.get('watch')
+        if inbox_watch:
+            inbox_path = _resolve(inbox_watch)
+        inbox_poll_interval = inbox.get('poll_interval', 5)
+
     # ---- cache ----------------------------------------------------------
     cache_raw: Dict[str, Any] = raw.get("cache", {})
     cache_enabled = cache_raw.get("enabled", False)
@@ -195,6 +209,8 @@ def parse_agent_yaml(path: str) -> WorkspaceConfig:
         permissions=permissions,
         cache=cache_enabled,
         cache_ttl=cache_ttl,
+        inbox_path=inbox_path,
+        inbox_poll_interval=inbox_poll_interval,
     )
 
 

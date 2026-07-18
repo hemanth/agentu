@@ -318,6 +318,45 @@ memories = agent.recall(query="how to reach the customer", semantic=True)
 
 SQLite-backed, searchable, persistent across sessions. When `semantic=True`, uses embedding similarity instead of substring matching.
 
+### Structured extraction
+
+The LLM auto-extracts entities, topics, summary, and importance on every `remember()` call. Just pass raw text:
+
+```python
+agent.remember("Anthropic reports 62% of Claude usage is code-related")
+# LLM extracts → entities: ["Anthropic", "Claude"], topics: ["AI", "code"], importance: 0.8
+
+# Conversation turns skip extraction automatically (no point tagging chat)
+agent.remember("user said hello", memory_type="conversation")
+
+# Manual override — skips the LLM call
+agent.remember("data", entities=["X"], topics=["Y"])
+
+# Opt out globally
+agent = Agent("bot", auto_extract_memory=False)
+```
+
+### Background consolidation
+
+Like the brain during sleep — reviews memories on a timer, finds patterns, stores insights:
+
+```python
+agent.with_consolidation(every=30)  # every 30 minutes
+```
+
+The consolidation agent reads unconsolidated memories, discovers cross-cutting themes, and stores synthesized insights as high-importance memories.
+
+### Inbox file watcher
+
+Drop a file → agent processes it → stored as memory:
+
+```python
+agent.with_inbox("./inbox")
+# Or via workspace: inbox: { watch: ./inbox } in agent.yaml
+```
+
+Files are processed via `agent.infer()` and moved to `.processed/`.
+
 ### Rationale Recording (ADRs)
 
 Agents can explicitly record architectural decisions and the reasoning behind their actions, creating an automated audit trail.
@@ -761,6 +800,8 @@ agent.with_permissions(allow_dangerous=True)     # permission control
 await agent.with_mcp([url])              # MCP servers
 agent.with_backend("redis://...")         # Redis storage backend
 agent.with_vectors("./vectors")           # LanceDB for remember() + recall(semantic=True)
+agent.with_consolidation(every=30)        # background memory consolidation
+agent.with_inbox("./inbox")              # file watcher → auto-ingest
 agent = await Agent.from_workspace(".agentu/")  # load from workspace directory
 
 # Loop Engineering
