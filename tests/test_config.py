@@ -26,6 +26,7 @@ cache:
 
 def test_schema_parsing(test_yaml_path):
     """Test that pydantic correctly infers and loads the model from file."""
+    pytest.importorskip("yaml", reason="PyYAML not installed")
     config = AgentConfig.load(test_yaml_path)
     
     assert config.name == "yaml-bot"
@@ -38,6 +39,7 @@ def test_schema_parsing(test_yaml_path):
 @pytest.mark.asyncio
 async def test_agent_from_config_factory(test_yaml_path):
     """Test that Agent.from_config parses the schema and applies the builders."""
+    pytest.importorskip("yaml", reason="PyYAML not installed")
     pytest.importorskip("apprise", reason="apprise not installed")
     agent = await Agent.from_config(test_yaml_path)
     
