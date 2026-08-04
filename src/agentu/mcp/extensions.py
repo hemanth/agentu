@@ -114,9 +114,15 @@ class StreamableHTTPTransport:
         response: aiohttp.ClientResponse,
         request_id: int,
     ) -> Dict[str, Any]:
-        """Read SSE events from a streaming response until we get our result."""
+        """Read SSE events from a streaming response until we get our result.
+
+        Uses chunked reads to avoid aiohttp's default 128 KB per-line limit,
+        which is exceeded by large SSE payloads (e.g. Robinhood tools/list).
+        """
         result = None
-        async for line_bytes in response.content:
+        # Read the full body in chunks to avoid LineTooLong errors
+        body = await response.content.read()
+        for line_bytes in body.splitlines():
             line = line_bytes.decode("utf-8", errors="replace").strip()
             if not line or not line.startswith("data:"):
                 continue
