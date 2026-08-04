@@ -56,7 +56,9 @@ class StreamableHTTPTransport:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(
+                read_bufsize=1024 * 1024,  # 1 MB — avoids LineTooLong on large SSE payloads
+            )
         return self._session
 
     async def send_request(
@@ -114,15 +116,9 @@ class StreamableHTTPTransport:
         response: aiohttp.ClientResponse,
         request_id: int,
     ) -> Dict[str, Any]:
-        """Read SSE events from a streaming response until we get our result.
-
-        Uses chunked reads to avoid aiohttp's default 128 KB per-line limit,
-        which is exceeded by large SSE payloads (e.g. Robinhood tools/list).
-        """
+        """Read SSE events from a streaming response until we get our result."""
         result = None
-        # Read the full body in chunks to avoid LineTooLong errors
-        body = await response.content.read()
-        for line_bytes in body.splitlines():
+        async for line_bytes in response.content:
             line = line_bytes.decode("utf-8", errors="replace").strip()
             if not line or not line.startswith("data:"):
                 continue
