@@ -4,6 +4,12 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.5.4] - 2026-08-07
+
+### Fixed
+
+- **CI Dependencies**: Added `PyYAML` to `dev` dependencies in `pyproject.toml` and added a graceful `pytest.skip` guard in `test_memory_patterns.py` when PyYAML is not installed.
+
 ## [2.5.3] - 2026-08-07
 
 ### Fixed

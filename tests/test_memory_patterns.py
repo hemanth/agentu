@@ -132,6 +132,10 @@ class TestInbox:
         assert (tmp_path / 'inbox' / '.hidden').exists()
 
     def test_workspace_inbox_config(self, tmp_path):
+        try:
+            import yaml
+        except ImportError:
+            pytest.skip("PyYAML not installed")
         from agentu.workspace import parse_agent_yaml
         ws = tmp_path / '.agentu'
         ws.mkdir()
