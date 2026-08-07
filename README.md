@@ -274,7 +274,7 @@ Load portable plugins adhering to the [Agent Plugins 1.0.0 specification](https:
 
 ```python
 # Load a single plugin package directory
-agent = await Agent("assistant").with_plugin("./plugins/bigquery-reports")
+agent = await Agent("assistant").with_plugins("./plugins/bigquery-reports")
 
 # Or load multiple plugins at once
 agent = await Agent("assistant").with_plugins([
@@ -834,7 +834,7 @@ agent.with_vectors("./vectors")           # LanceDB for remember() + recall(sema
 agent.with_consolidation(every=30)        # background memory consolidation
 agent.with_inbox("./inbox")              # file watcher → auto-ingest
 agent.with_agents([a1, a2])              # agents as callable tools
-await agent.with_plugin("./plugins/reports") # Agent Plugins v1.0.0 spec
+await agent.with_plugins("./plugins/reports") # Agent Plugins v1.0.0 spec
 agent = await Agent.from_workspace(".agentu/")  # load from workspace directory
 
 # Loop Engineering

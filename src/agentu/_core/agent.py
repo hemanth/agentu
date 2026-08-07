@@ -938,7 +938,7 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         logger.info(f"Added {len(resolved_skills)} skills to agent {self.name}")
         return self
 
-    async def with_plugin(self, plugins: Union[str, Any, List[Union[str, Any]]]) -> 'Agent':
+    async def with_plugins(self, plugins: Union[str, Any, List[Union[str, Any]]]) -> 'Agent':
         """Load one or more Agent Plugins conforming to the Agent Plugins 1.0.0 specification.
         
         Discovers and loads:
@@ -954,13 +954,13 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
             
         Example:
             >>> # Load single plugin
-            >>> agent = await Agent("assistant").with_plugin("./plugins/reports")
+            >>> agent = await Agent("assistant").with_plugins("./plugins/reports")
             >>> # Load multiple plugins
-            >>> agent = await Agent("assistant").with_plugin(["./plugins/reports", "./plugins/data-kit"])
+            >>> agent = await Agent("assistant").with_plugins(["./plugins/reports", "./plugins/data-kit"])
         """
         if isinstance(plugins, (list, tuple)):
             for p in plugins:
-                await self.with_plugin(p)
+                await self.with_plugins(p)
             return self
 
         from ..plugin.loader import PluginLoader
@@ -981,9 +981,9 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
 
         return self
 
-    async def with_plugins(self, plugins: Union[str, Any, List[Union[str, Any]]]) -> 'Agent':
-        """Alias for `with_plugin()`."""
-        return await self.with_plugin(plugins)
+    async def with_plugin(self, plugins: Union[str, Any, List[Union[str, Any]]]) -> 'Agent':
+        """Alias for `with_plugins()`."""
+        return await self.with_plugins(plugins)
 
     def __call__(self, task: Union[str, Callable]) -> Step:
         """Make agent callable to create workflow steps.
