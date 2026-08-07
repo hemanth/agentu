@@ -541,7 +541,7 @@ class MCPSTDIOTransport(MCPTransport):
         self.request_id = 0
         self._process: Optional[asyncio.subprocess.Process] = None
         self._initialized = False
-        self._read_lock = asyncio.Lock()
+        self._read_lock: Optional[asyncio.Lock] = None
 
     def _next_request_id(self) -> int:
         """Get next request ID for JSON-RPC."""
@@ -658,6 +658,9 @@ class MCPSTDIOTransport(MCPTransport):
             message["params"] = params
 
         logger.info(f"[STDIO] Sending {method} (id:{req_id})")
+
+        if self._read_lock is None:
+            self._read_lock = asyncio.Lock()
 
         async with self._read_lock:
             await self._write_message(message)
