@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Python 3.9 Compatibility**: Lazy-initialize all `asyncio` primitives (`Event`, `Queue`) in `Scheduler` and `MCPSSETransport` to avoid `RuntimeError: There is no current event loop` during synchronous construction.
+- **Python 3.9 Compatibility**: Lazy-initialize all `asyncio` primitives (`Event`, `Queue`, `Semaphore`) in `Scheduler`, `MCPSSETransport`, and `TaskQueue` to avoid `RuntimeError: There is no current event loop` during synchronous construction.
 
 ## [2.5.4] - 2026-08-07
 
