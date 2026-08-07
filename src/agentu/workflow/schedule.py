@@ -286,17 +286,22 @@ class Scheduler:
         self.agent = agent
         self.config = config
         self.store = store or ScheduleStore()
-        self._stop_event = asyncio.Event()
+        self._stop_event: Optional[asyncio.Event] = None
         self._iteration = 0
         self._task: Optional[asyncio.Task] = None
 
     def stop(self):
         """Request graceful stop."""
+        if self._stop_event is None:
+            self._stop_event = asyncio.Event()
         self._stop_event.set()
         logger.info(f"Schedule {self.config.id}: Stop requested")
 
     async def start(self):
         """Start the schedule loop."""
+        if self._stop_event is None:
+            self._stop_event = asyncio.Event()
+
         # Persist schedule
         self.store.save_schedule(self.agent.name, self.config)
 

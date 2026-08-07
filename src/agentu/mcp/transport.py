@@ -260,7 +260,7 @@ class MCPSSETransport(MCPTransport):
         self.request_id = 0
         self.session_endpoint: Optional[str] = None
         self._http_session: Optional[aiohttp.ClientSession] = None
-        self.event_queue: asyncio.Queue = asyncio.Queue()
+        self.event_queue: Optional[asyncio.Queue] = None
         self._listener_task: Optional[asyncio.Task] = None
         self.running = False
         self._initialized = False
@@ -299,6 +299,9 @@ class MCPSSETransport(MCPTransport):
 
     async def _connect(self):
         """Establish SSE connection and get session endpoint."""
+        if self.event_queue is None:
+            self.event_queue = asyncio.Queue()
+
         if not self.config.url:
             raise ValueError("URL is required for SSE transport")
 
