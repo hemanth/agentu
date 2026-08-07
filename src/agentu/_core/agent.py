@@ -938,6 +938,60 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         logger.info(f"Added {len(resolved_skills)} skills to agent {self.name}")
         return self
 
+    async def with_plugin(self, plugin_path: Union[str, Any]) -> 'Agent':
+        """Load an Agent Plugin conforming to the Agent Plugins 1.0.0 specification.
+        
+        Discovers and loads:
+        - Manifest (`plugin.json`)
+        - Agent Skills (`skills/*/SKILL.md`) via `with_skills()`
+        - MCP Servers (`mcp.json`) via `with_mcp()`
+        
+        Args:
+            plugin_path: Path to the plugin root directory
+            
+        Returns:
+            Self for method chaining
+            
+        Example:
+            >>> agent = await Agent("assistant").with_plugin("./plugins/reports")
+        """
+        from ..plugin.loader import PluginLoader
+        
+        loader = PluginLoader(plugin_path)
+        loader.load()
+
+        # Load skills if discovered
+        if loader.skills:
+            await self.with_skills([str(s) for s in loader.skills])
+
+        # Load MCP servers if discovered
+        if loader.mcp_config:
+            try:
+                await self.with_mcp([str(loader.mcp_config)])
+            except Exception as e:
+                logger.warning(f"Failed to load plugin MCP config at {loader.mcp_config}: {e}")
+
+        return self
+
+    async def with_plugins(self, plugin_paths: List[Union[str, Any]]) -> 'Agent':
+        """Load multiple Agent Plugins (Agent Plugins 1.0.0 spec).
+        
+        Args:
+            plugin_paths: List of plugin root directory paths
+            
+        Returns:
+            Self for method chaining
+            
+        Example:
+            >>> agent = await Agent("assistant").with_plugins([
+            ...     "./plugins/reports",
+            ...     "./plugins/data-kit"
+            ... ])
+        """
+        for path in plugin_paths:
+            await self.with_plugin(path)
+        return self
+
     def __call__(self, task: Union[str, Callable]) -> Step:
         """Make agent callable to create workflow steps.
 

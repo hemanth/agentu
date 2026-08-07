@@ -268,6 +268,21 @@ result = await orchestrator.infer("Research AI coding tools, analyze trends, wri
 
 Each child agent becomes a callable tool (`call_researcher`, `call_analyst`, `call_writer`). The orchestrator's LLM decides when to call which agent, enabling sequential, parallel, conditional, and looping workflows through its own reasoning.
 
+### Agent Plugins (v1.0.0 Specification)
+
+Load portable plugins adhering to the [Agent Plugins 1.0.0 specification](https://agent-plugins.org/specification) (backed by Google, Amazon, Microsoft, Cursor, OpenAI, Vercel). `agentu` automatically discovers and loads `plugin.json`, skills from `skills/*/SKILL.md`, and MCP servers from `mcp.json`:
+
+```python
+# Load a single plugin package directory
+agent = await Agent("assistant").with_plugin("./plugins/bigquery-reports")
+
+# Or load multiple plugins at once
+agent = await Agent("assistant").with_plugins([
+    "./plugins/reports-plugin",
+    "./plugins/data-agent-kit"
+])
+```
+
 ## Caching
 
 Cache LLM responses to skip redundant API calls. Works with both plain strings and full conversations.
@@ -819,6 +834,7 @@ agent.with_vectors("./vectors")           # LanceDB for remember() + recall(sema
 agent.with_consolidation(every=30)        # background memory consolidation
 agent.with_inbox("./inbox")              # file watcher → auto-ingest
 agent.with_agents([a1, a2])              # agents as callable tools
+await agent.with_plugin("./plugins/reports") # Agent Plugins v1.0.0 spec
 agent = await Agent.from_workspace(".agentu/")  # load from workspace directory
 
 # Loop Engineering

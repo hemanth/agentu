@@ -4,6 +4,14 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.5.0] - 2026-08-06
+
+### Added
+
+- **`with_plugin()` & `with_plugins()`** — Native support for the **Agent Plugins 1.0.0 specification** (backed by Google, Amazon, Microsoft, Cursor, OpenAI, Vercel). Automatically discovers `plugin.json` manifests, Agent Skills from `skills/*/SKILL.md` via `with_skills()`, and MCP servers from `mcp.json` via `with_mcp()`. Enforces path containment (§4.1) and zero-config component discovery.
+- `PluginLoader` module (`agentu.plugin.loader.PluginLoader`) for parsing and validating Agent Plugin directory packages.
+- 6 new unit tests in `test_plugin.py` covering manifest validation, component discovery, path containment, and multi-plugin loading.
+
 ## [2.4.0] - 2026-07-18
 
 ### Added
