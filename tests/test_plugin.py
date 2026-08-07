@@ -99,3 +99,14 @@ class TestAgentWithPlugin:
         agent = _make_agent()
         await agent.with_plugins([temp_plugin, plugin2])
         assert len(agent.skills) == 1
+
+    @pytest.mark.asyncio
+    async def test_with_plugin_accepts_list(self, temp_plugin, tmp_path):
+        plugin2 = tmp_path / "plugin-three"
+        plugin2.mkdir()
+        manifest2 = {"name": "plugin-three"}
+        (plugin2 / "plugin.json").write_text(json.dumps(manifest2), encoding="utf-8")
+
+        agent = _make_agent()
+        await agent.with_plugin([temp_plugin, plugin2])
+        assert len(agent.skills) == 1

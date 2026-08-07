@@ -938,8 +938,8 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         logger.info(f"Added {len(resolved_skills)} skills to agent {self.name}")
         return self
 
-    async def with_plugin(self, plugin_path: Union[str, Any]) -> 'Agent':
-        """Load an Agent Plugin conforming to the Agent Plugins 1.0.0 specification.
+    async def with_plugin(self, plugins: Union[str, Any, List[Union[str, Any]]]) -> 'Agent':
+        """Load one or more Agent Plugins conforming to the Agent Plugins 1.0.0 specification.
         
         Discovers and loads:
         - Manifest (`plugin.json`)
@@ -947,17 +947,25 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         - MCP Servers (`mcp.json`) via `with_mcp()`
         
         Args:
-            plugin_path: Path to the plugin root directory
+            plugins: Path to plugin root directory, Path object, or list of paths
             
         Returns:
             Self for method chaining
             
         Example:
+            >>> # Load single plugin
             >>> agent = await Agent("assistant").with_plugin("./plugins/reports")
+            >>> # Load multiple plugins
+            >>> agent = await Agent("assistant").with_plugin(["./plugins/reports", "./plugins/data-kit"])
         """
+        if isinstance(plugins, (list, tuple)):
+            for p in plugins:
+                await self.with_plugin(p)
+            return self
+
         from ..plugin.loader import PluginLoader
         
-        loader = PluginLoader(plugin_path)
+        loader = PluginLoader(plugins)
         loader.load()
 
         # Load skills if discovered
@@ -973,24 +981,9 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
 
         return self
 
-    async def with_plugins(self, plugin_paths: List[Union[str, Any]]) -> 'Agent':
-        """Load multiple Agent Plugins (Agent Plugins 1.0.0 spec).
-        
-        Args:
-            plugin_paths: List of plugin root directory paths
-            
-        Returns:
-            Self for method chaining
-            
-        Example:
-            >>> agent = await Agent("assistant").with_plugins([
-            ...     "./plugins/reports",
-            ...     "./plugins/data-kit"
-            ... ])
-        """
-        for path in plugin_paths:
-            await self.with_plugin(path)
-        return self
+    async def with_plugins(self, plugins: Union[str, Any, List[Union[str, Any]]]) -> 'Agent':
+        """Alias for `with_plugin()`."""
+        return await self.with_plugin(plugins)
 
     def __call__(self, task: Union[str, Callable]) -> Step:
         """Make agent callable to create workflow steps.
