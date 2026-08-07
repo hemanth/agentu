@@ -110,7 +110,7 @@ class TaskQueue:
     ) -> None:
         self.max_concurrent = max_concurrent
         self.task_ttl = task_ttl
-        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._semaphore: Optional[asyncio.Semaphore] = None
         self._tasks: Dict[str, TaskInfo] = {}
         self._asyncio_tasks: Dict[str, asyncio.Task] = {}
 
@@ -188,6 +188,8 @@ class TaskQueue:
         coro_factory: Callable[[], Coroutine[Any, Any, Any]],
     ) -> None:
         """Internal runner: acquires semaphore, executes, stores result."""
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self.max_concurrent)
         async with self._semaphore:
             # Task may have been cancelled while waiting for semaphore
             if info.status == TaskStatus.CANCELLED:
