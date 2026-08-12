@@ -22,7 +22,8 @@ class StorageMixin:
 
     def with_backend(
         self,
-        backend: Union[str, Any],
+        backend: Union[str, Any] = None,
+        durable: bool = False,
     ) -> 'Agent':
         """Set the key-value storage backend for sessions, checkpoints, and memory.
 
@@ -38,6 +39,15 @@ class StorageMixin:
             >>> # or with a custom backend
             >>> agent = Agent("bot").with_backend(MyCustomBackend())
         """
+        if durable:
+            import os
+            durable_dir = os.path.expanduser("~/.agentu/agents")
+            self._durable = True
+            self._durable_dir = durable_dir
+            if backend is None:
+                os.makedirs(durable_dir, exist_ok=True)
+                backend = os.path.join(durable_dir, f"{self.name}.db")
+
         if isinstance(backend, str):
             # Treat as Redis URL — lazy-create on first use
             self._backend_url = backend

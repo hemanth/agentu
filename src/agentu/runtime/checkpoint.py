@@ -44,6 +44,8 @@ class CheckpointData:
     checkpointed_at: float
     parent_session_id: Optional[str] = None
     pending_tool_calls: Optional[Dict[str, Any]] = None
+    schedule_state: Optional[Dict[str, Any]] = None
+    inbox_cursor: Optional[List[str]] = None
 
     @property
     def was_interrupted(self) -> bool:
@@ -60,6 +62,10 @@ class CheckpointData:
         # Handle checkpoints saved before pending_tool_calls existed
         if 'pending_tool_calls' not in data:
             data['pending_tool_calls'] = None
+        if 'schedule_state' not in data:
+            data['schedule_state'] = None
+        if 'inbox_cursor' not in data:
+            data['inbox_cursor'] = None
         return cls(**data)
 
 
@@ -98,7 +104,9 @@ class CheckpointStore:
                 created_at      REAL    NOT NULL,
                 checkpointed_at REAL    NOT NULL,
                 parent_session_id TEXT,
-                pending_tool_calls TEXT
+                pending_tool_calls TEXT,
+                schedule_state TEXT,
+                inbox_cursor TEXT
             )
         """)
         cursor.execute("""
@@ -116,6 +124,18 @@ class CheckpointStore:
             )
         except sqlite3.OperationalError:
             pass  # Column already exists
+        try:
+            cursor.execute(
+                "ALTER TABLE checkpoints ADD COLUMN schedule_state TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE checkpoints ADD COLUMN inbox_cursor TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass
         self.conn.commit()
 
     # ── public API ──────────────────────────────────────────
@@ -136,8 +156,9 @@ class CheckpointStore:
                 INSERT INTO checkpoints
                     (session_id, agent_name, conversation, metadata,
                      turn_count, created_at, checkpointed_at,
-                     parent_session_id, pending_tool_calls)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     parent_session_id, pending_tool_calls,
+                     schedule_state, inbox_cursor)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data.session_id,
@@ -149,6 +170,8 @@ class CheckpointStore:
                     data.checkpointed_at,
                     data.parent_session_id,
                     json.dumps(data.pending_tool_calls) if data.pending_tool_calls else None,
+                    json.dumps(data.schedule_state) if data.schedule_state else None,
+                    json.dumps(data.inbox_cursor) if data.inbox_cursor else None,
                 ),
             )
             self.conn.commit()
@@ -180,7 +203,8 @@ class CheckpointStore:
             """
             SELECT session_id, agent_name, conversation, metadata,
                    turn_count, created_at, checkpointed_at,
-                   parent_session_id, pending_tool_calls
+                   parent_session_id, pending_tool_calls,
+                   schedule_state, inbox_cursor
             FROM checkpoints
             WHERE session_id = ?
             ORDER BY checkpointed_at DESC
@@ -194,6 +218,12 @@ class CheckpointStore:
 
         pending_raw = row["pending_tool_calls"]
         pending = json.loads(pending_raw) if pending_raw else None
+        
+        schedule_raw = row["schedule_state"]
+        schedule_state = json.loads(schedule_raw) if schedule_raw else None
+        
+        inbox_raw = row["inbox_cursor"]
+        inbox_cursor = json.loads(inbox_raw) if inbox_raw else None
 
         return CheckpointData(
             session_id=row["session_id"],
@@ -205,6 +235,8 @@ class CheckpointStore:
             checkpointed_at=row["checkpointed_at"],
             parent_session_id=row["parent_session_id"],
             pending_tool_calls=pending,
+            schedule_state=schedule_state,
+            inbox_cursor=inbox_cursor,
         )
 
     def list_checkpoints(

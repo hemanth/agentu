@@ -31,6 +31,7 @@ from .memory.storage import MemoryStorage, JSONStorage, SQLiteStorage, create_st
 from .runtime.serve import serve, AgentServer, create_server
 from .runtime.session import Session, SessionManager
 from .runtime.sandbox import SubprocessSandbox, SandboxLimits, SandboxResult, SandboxBackend
+from .runtime.durable import AgentLock
 
 # ── Eval ─────────────────────────────────────────────────────────
 from .eval.eval import evaluate, EvalResult, FailedCase
@@ -121,7 +122,7 @@ __all__ = [
     "MemoryStorage", "JSONStorage", "SQLiteStorage", "create_storage",
     # Runtime
     "serve", "AgentServer", "create_server",
-    "Session", "SessionManager",
+    "Session", "SessionManager", "AgentLock",
     "SubprocessSandbox", "SandboxLimits", "SandboxResult", "SandboxBackend",
     # Eval
     "evaluate", "EvalResult", "FailedCase",

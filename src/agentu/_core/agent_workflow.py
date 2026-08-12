@@ -205,14 +205,35 @@ class WorkflowMixin:
         if not hasattr(self, '_schedulers') or not self._schedulers:
             raise RuntimeError("No schedules configured. Use with_schedule() first.")
 
-        tasks = [asyncio.create_task(s.start()) for s in self._schedulers]
-        await asyncio.gather(*tasks)
+        if getattr(self, '_durable', False):
+            from ..runtime.durable import AgentLock
+            from ..runtime.session import SessionManager
+            self._agent_lock = AgentLock(self.name, base_dir=self._durable_dir)
+            self._agent_lock.acquire()
+            try:
+                manager = SessionManager()
+                session = manager.resume(self.name, self)
+                if not session:
+                    session = manager.create_session(self, session_id=self.name)
+                session.enable_auto_checkpoint()
+                
+                tasks = [asyncio.create_task(s.start()) for s in self._schedulers]
+                await asyncio.gather(*tasks)
+            finally:
+                if self._agent_lock:
+                    self._agent_lock.release()
+        else:
+            tasks = [asyncio.create_task(s.start()) for s in self._schedulers]
+            await asyncio.gather(*tasks)
 
     def stop(self) -> None:
         """Stop all running schedules gracefully."""
         if hasattr(self, '_schedulers'):
             for scheduler in self._schedulers:
                 scheduler.stop()
+        if getattr(self, '_agent_lock', None):
+            self._agent_lock.release()
+            self._agent_lock = None
 
     def findings(self, status: str = "pending", limit: int = 50) -> List[Dict[str, Any]]:
         """Get findings from scheduled runs.

@@ -4,6 +4,18 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.6.0] - 2026-08-12
+
+### Added
+
+- **Durable Agents**: `agent.with_backend(durable=True)` enables crash-safe, resumable agent state.
+  - `AgentLock` — single-writer file lock (`fcntl.flock`) ensuring only one instance of an agent runs at a time.
+  - Auto-resume from checkpoint on `agent.start()`.
+  - Auto-checkpoint before each tool call (write-ahead).
+  - Default SQLite backend at `~/.agentu/agents/{name}.db` when no backend URL is provided.
+  - Lock auto-releases on crash or `agent.stop()`.
+- **Extended `CheckpointData`**: New `schedule_state` and `inbox_cursor` fields for full agent state snapshots.
+
 ## [2.5.6] - 2026-08-07
 
 ### Fixed

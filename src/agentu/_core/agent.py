@@ -241,6 +241,9 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         # Storage backends (set via with_backend / with_vectors)
         self._storage_backend = None
         self._backend_url: Optional[str] = None
+        self._durable: bool = False
+        self._durable_dir: Optional[str] = None
+        self._agent_lock = None
         self._vector_backend = None
         self._vector_dsn: Optional[str] = None
         self._vector_dimension: int = 384
