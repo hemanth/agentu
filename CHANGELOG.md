@@ -4,6 +4,20 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.8.0] - 2026-09-02
+
+### Added
+
+- **Zero-Dependency Native LLM Drivers** (`agentu.drivers`):
+  - `BaseDriver`, `OpenAIDriver`, `GeminiDriver`, `ClaudeDriver`, and `OllamaDriver`.
+  - Direct REST protocol adapters for Google Gemini, Anthropic Claude Messages, and native Ollama without installing heavy provider SDK packages.
+  - Automatic driver selection via `get_driver_for_model(model)` based on model identifier and environment keys.
+- **Typed Generics (`Agent[T]` & `InferResult[T]`)**:
+  - `InferResult[T]` provides typed `.data` and `.structured` properties with full IDE autocomplete while maintaining 100% dictionary access compatibility (`result["text_response"]`, `result["structured"]`).
+- **Interactive Developer Console (`agentu dev`)**:
+  - Fast interactive terminal debugging console for live agent testing, tool execution inspects, and prompt iterations.
+  - Run via `agentu dev` or `agentu dev my_agent.py`.
+
 ## [2.7.1] - 2026-09-02
 
 ### Added

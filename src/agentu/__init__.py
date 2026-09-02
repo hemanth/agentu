@@ -2,6 +2,7 @@
 
 # ── Core (always available) ──────────────────────────────────────
 from ._core.agent import Agent
+from ._core.result import InferResult
 from ._core.tools import Tool, ToolPermission
 from ._core.hooks import HookAction, HookResult, HookSet, PermissionApprovalRequired
 from ._core.config import AgentConfig
@@ -13,6 +14,11 @@ from ._core.multimodal import (
     build_content_parts, resolve_image, resolve_media,
     detect_mime_type, detect_media_kind,
     convert_media_to_markdown, detect_model_capabilities,
+)
+from .drivers import (
+    BaseDriver, DriverResponse,
+    OpenAIDriver, GeminiDriver, ClaudeDriver, OllamaDriver,
+    get_driver_for_model,
 )
 
 # ── Skills & Discovery ───────────────────────────────────────────
@@ -148,13 +154,18 @@ __all__ = [
     "PII", "ContentFilter", "MaxLength", "JSONSchema",
     "Middleware", "BaseMiddleware", "MiddlewareChain", "CallContext",
     "CostTracker", "LoggerMiddleware", "RetryMiddleware", "NotifyMiddleware",
-    # Structured Output
+    # Structured Output & Typed Generics
+    "InferResult",
     "pydantic_to_json_schema", "build_response_format",
     "parse_and_validate", "format_validation_error", "StructuredOutputError",
     # Multi-modal
     "build_content_parts", "resolve_image", "resolve_media",
     "detect_mime_type", "detect_media_kind",
     "convert_media_to_markdown", "detect_model_capabilities",
+    # Drivers
+    "BaseDriver", "DriverResponse",
+    "OpenAIDriver", "GeminiDriver", "ClaudeDriver", "OllamaDriver",
+    "get_driver_for_model",
     # Storage
     "StorageBackend", "VectorBackend",
     "InMemoryBackend", "InMemoryVectorBackend",

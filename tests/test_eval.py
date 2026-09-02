@@ -8,9 +8,14 @@ from agentu import Agent, Tool, evaluate, EvalResult, FailedCase
 
 def _ollama_up():
     try:
-        socket.create_connection(("localhost", 11434), timeout=0.5).close()
-        return True
-    except OSError:
+        import urllib.request
+        import json as _json
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            data = _json.loads(resp.read())
+            models = [m["name"] for m in data.get("models", [])]
+            return "qwen3:latest" in models or any("qwen" in m for m in models)
+    except Exception:
         return False
 
 

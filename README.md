@@ -105,19 +105,26 @@ agent = Agent("assistant").with_hooks(
 
 `pre_tool` returns ALLOW, DENY, or MODIFY. Denials are fed back to the model as context. Multiple hooks chain additively.
 
-## Structured outputs
+## Structured outputs & Typed Generics
 
-Return validated Pydantic models instead of raw text:
+Return validated Pydantic models with full type safety and IDE autocomplete:
 
 ```python
 from pydantic import BaseModel
+from agentu import Agent, InferResult
 
 class Review(BaseModel):
     rating: int
     summary: str
 
-result = await agent.infer("Review this product", output_type=Review)
-review = result["structured"]  # validated Review instance
+# Typed inference — result.data is fully typed as Review!
+result: InferResult[Review] = await agent.infer("Review this product", output_type=Review)
+
+print(result.data.rating)    # Typed attribute access (IDE autocompleted)
+print(result.data.summary)
+
+# 100% backward compatible dictionary access:
+review = result["structured"]
 ```
 
 On validation failure, the error is fed back to the LLM for retry (controlled by `max_corrections` from guardrails).
@@ -952,6 +959,38 @@ results.to_json()    # export
 step1 >> step2          # sequential
 step1 & step2           # parallel
 await workflow.run()    # execute
+```
+
+## Zero-Dependency Native Drivers
+
+`agentu` speaks native provider REST protocols directly without requiring 500MB SDKs:
+
+```python
+from agentu.drivers import GeminiDriver, ClaudeDriver, OpenAIDriver, OllamaDriver, get_driver_for_model
+
+# Auto-detected from model name and environment keys
+driver = get_driver_for_model("gemini-2.5-flash")
+
+# Or direct native protocol instantiation:
+gemini = GeminiDriver(model="gemini-2.5-flash")
+claude = ClaudeDriver(model="claude-3-7-sonnet-20250219")
+ollama = OllamaDriver(model="llama3", keep_alive="10m")
+```
+
+## CLI & Interactive Dev Console
+
+```bash
+# Start an interactive agent debugging console
+agentu dev
+
+# Or load and test an existing agent script
+agentu dev my_agent.py
+
+# Run autonomous Ralph loop mode
+agentu ralph PROMPT.md --max 50
+
+# Serve agent REST API & dashboard
+agentu serve --port 8000
 ```
 
 ## Examples
