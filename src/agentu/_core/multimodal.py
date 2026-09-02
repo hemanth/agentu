@@ -302,20 +302,139 @@ def resolve_image(source: str) -> Dict[str, Any]:
     return resolve_media(source)
 
 
+def detect_model_capabilities(model: Optional[str]) -> Dict[str, bool]:
+    """Detect multimodal capabilities based on model name / provider.
+
+    Returns:
+        Dict mapping media kind ('image', 'audio', 'video', 'document') to bool.
+    """
+    if not model:
+        # Unknown/unspecified model — assume full multimodal support
+        return {"image": True, "audio": True, "video": True, "document": True}
+
+    m = model.lower()
+
+    # Gemini models support full native multimodal (image, audio, video, document)
+    if "gemini" in m:
+        return {"image": True, "audio": True, "video": True, "document": True}
+
+    # GPT-4o / GPT-4.5 / GPT-5
+    if "gpt-4o" in m or "gpt-4.5" in m or "gpt-5" in m or "o1" in m or "o3" in m:
+        return {"image": True, "audio": "audio" in m, "video": True, "document": True}
+
+    # Claude models support images and documents natively, but not raw video_url or input_audio
+    if "claude" in m:
+        return {"image": True, "audio": False, "video": False, "document": True}
+
+    # Vision-capable open/Ollama models (LLaVA, Qwen-VL, MiniCPM-V, etc.)
+    if any(v in m for v in ("llava", "vision", "qwen-vl", "qwen2.5-vl", "minicpm", "moondream", "bakllava")):
+        return {"image": True, "audio": False, "video": "video" in m or "vl" in m, "document": False}
+
+    # Default text-only LLMs (e.g. Llama, Qwen-Coder, Mistral, DeepSeek, Phi, Gemma)
+    return {"image": False, "audio": False, "video": False, "document": False}
+
+
+def _extract_youtube_id(url: str) -> Optional[str]:
+    """Extract YouTube video ID from various URL formats."""
+    if "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0].split("&")[0]
+    if "youtube.com/watch" in url:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url)
+        params = urllib.parse.parse_qs(parsed.query)
+        if "v" in params and params["v"]:
+            return params["v"][0]
+    if "youtube.com/embed/" in url:
+        return url.split("youtube.com/embed/")[1].split("?")[0]
+    return None
+
+
+def convert_media_to_markdown(
+    source: Union[str, Dict[str, Any]],
+    custom_converter: Optional[Any] = None,
+) -> str:
+    """Convert a media item (video, audio, image, document) into Markdown text.
+
+    Uses `custom_converter` if provided, then tries `markitdown` or `youtube_transcript_api`
+    if installed, and falls back to a structured Markdown representation.
+
+    Args:
+        source: Media URL, local path, or explicit dict
+        custom_converter: Optional callable taking source and returning markdown string
+
+    Returns:
+        Markdown formatted string representation of the media.
+    """
+    if custom_converter is not None:
+        try:
+            res = custom_converter(source)
+            if res:
+                return str(res)
+        except Exception as e:
+            logger.debug(f"Custom media converter failed for {source}: {e}")
+
+    # Extract target URL or path
+    url = ""
+    kind = "media"
+    if isinstance(source, dict):
+        kind = source.get("type", "media")
+        url = source.get("url") or source.get("uri") or str(source)
+    else:
+        url = str(source)
+        kind = detect_media_kind(url)
+
+    # 1. Check YouTube transcript API if it's a YouTube video
+    yt_id = _extract_youtube_id(url)
+    if yt_id:
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            transcript = YouTubeTranscriptApi.get_transcript(yt_id)
+            lines = [
+                f"- [{int(e['start'] // 60):02d}:{int(e['start'] % 60):02d}] {e['text']}"
+                for e in transcript
+            ]
+            return f"#### YouTube Video Transcript ({url})\n" + "\n".join(lines)
+        except Exception as e:
+            logger.debug(f"YouTube transcript extraction failed for {url}: {e}")
+
+    # 2. Try MarkItDown if installed
+    try:
+        from markitdown import MarkItDown
+        md = MarkItDown()
+        res = md.convert(url)
+        if res and res.text_content:
+            return f"#### Media Content ({url})\n{res.text_content.strip()}"
+    except Exception as e:
+        logger.debug(f"MarkItDown conversion failed for {url}: {e}")
+
+    # 3. Structured fallback placeholder
+    return (
+        f"#### [{kind.capitalize()} Attachment: {url}]\n"
+        f"*(Model does not support native {kind}. Install `markitdown` or `youtube-transcript-api` for automatic transcript/OCR extraction)*"
+    )
+
+
 def build_content_parts(
     text: str,
     images: Optional[List[str]] = None,
     media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    model: Optional[str] = None,
+    auto_convert_markdown: bool = True,
+    custom_converter: Optional[Any] = None,
 ) -> Union[str, List[Dict[str, Any]]]:
-    """Build OpenAI/GenAI-compatible content array.
+    """Build OpenAI/GenAI-compatible content array or auto-convert to Markdown for non-multimodal models.
 
     If no media or images provided, returns plain text string.
-    If media or images provided, returns multi-part content list.
+    If targeting a model that lacks native video/audio support and `auto_convert_markdown=True`,
+    unsupported media items are transcoded to Markdown and appended to the prompt.
 
     Args:
         text: Text prompt
         images: Optional list of image sources (URL, data URI, or file path)
         media: Optional list of media sources (images, audios, videos, or explicit dicts)
+        model: Optional model name to check capabilities against
+        auto_convert_markdown: If True, transcode unsupported media into Markdown
+        custom_converter: Optional custom callable to convert media to Markdown
 
     Returns:
         Plain string or list of content parts
@@ -329,8 +448,43 @@ def build_content_parts(
     if not all_media:
         return text
 
-    parts: List[Dict[str, Any]] = [{"type": "text", "text": text}]
-    for item in all_media:
-        parts.append(resolve_media(item))
+    # Check model capabilities if model is specified
+    caps = detect_model_capabilities(model) if model and auto_convert_markdown else None
 
-    return parts
+    native_parts: List[Dict[str, Any]] = []
+    converted_markdown: List[str] = []
+
+    for item in all_media:
+        # Determine media kind
+        if isinstance(item, dict):
+            raw_type = item.get("type", "")
+            if "video" in raw_type:
+                kind = "video"
+            elif "audio" in raw_type:
+                kind = "audio"
+            elif "doc" in raw_type or "pdf" in raw_type:
+                kind = "document"
+            else:
+                kind = "image"
+        else:
+            kind = detect_media_kind(str(item))
+
+        # Check if the target model supports this modality
+        if caps is not None and not caps.get(kind, True):
+            # Model lacks native support for this kind -> transcode to Markdown!
+            md_text = convert_media_to_markdown(item, custom_converter=custom_converter)
+            converted_markdown.append(md_text)
+        else:
+            # Model supports native modality -> resolve to content part
+            native_parts.append(resolve_media(item))
+
+    # If any media was converted to Markdown, append it to the text prompt
+    if converted_markdown:
+        md_section = "\n\n".join(converted_markdown)
+        text = f"{text}\n\n---\n### Attached Media (Transcribed / Markdown Extracted):\n{md_section}"
+
+    # If no native multi-part elements remain, return simple plain text string
+    if not native_parts:
+        return text
+
+    return [{"type": "text", "text": text}, *native_parts]

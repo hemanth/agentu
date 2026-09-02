@@ -147,6 +147,24 @@ result = await agent.infer(
 )
 ```
 
+### Capability-Aware Markdown Degradation
+
+When calling models that don't support native video/audio (Claude, DeepSeek, Llama, Ollama text models), `agentu` automatically transcodes media attachments to Markdown transcripts/text using `markitdown` or `youtube-transcript-api`:
+
+```python
+# Video URLs sent to a text model automatically get converted into a Markdown transcript!
+agent = Agent("bot", model="deepseek-r1")
+await agent.infer("What are the key points in this keynote?", media=["https://youtu.be/7Z5Vy9JBANs"])
+
+# Custom converter functions can also be attached:
+agent.with_media_converter(my_custom_transcriber)
+```
+
+Install the optional media package:
+```bash
+pip install "agentu[media]"
+```
+
 `images=[...]` remains 100% backward compatible for vision-only calls.
 
 ## Context management

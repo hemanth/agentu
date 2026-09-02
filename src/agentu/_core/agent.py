@@ -254,6 +254,9 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
         # Workspace path (set by from_workspace)
         self._workspace_path: Optional[str] = None
 
+        # Media converter for multimodal -> markdown fallback
+        self._media_converter = None
+
 
 
     @classmethod
@@ -1356,7 +1359,13 @@ User request: {user_input}"""
                 headers["Authorization"] = f"Bearer {self.api_key}"
 
             # Build message content (plain text or multi-part with media)
-            content = build_content_parts(prompt, images=images, media=media)
+            content = build_content_parts(
+                prompt,
+                images=images,
+                media=media,
+                model=self.model,
+                custom_converter=getattr(self, "_media_converter", None),
+            )
             body: Dict[str, Any] = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": content}],
@@ -1622,7 +1631,13 @@ User request: {user_input}"""
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
 
-                content = build_content_parts(prompt, images=images, media=media)
+                content = build_content_parts(
+                    prompt,
+                    images=images,
+                    media=media,
+                    model=self.model,
+                    custom_converter=getattr(self, "_media_converter", None),
+                )
                 session = await self._get_llm_session()
                 async with session.post(
                     f"{self.api_base}/chat/completions",
@@ -2500,4 +2515,17 @@ Example response for calculator:
         )
         exporter.attach(self.observer)
         self._otel_exporter = exporter
+        return self
+
+    def with_media_converter(self, converter: Any) -> 'Agent':
+        """Configure a custom media converter function for multimodal -> Markdown fallback.
+
+        Args:
+            converter: Callable that takes a media source (str or dict)
+                       and returns a Markdown formatted string.
+
+        Returns:
+            self for method chaining
+        """
+        self._media_converter = converter
         return self

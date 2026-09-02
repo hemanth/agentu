@@ -12,6 +12,7 @@ from ._core.structured import (
 from ._core.multimodal import (
     build_content_parts, resolve_image, resolve_media,
     detect_mime_type, detect_media_kind,
+    convert_media_to_markdown, detect_model_capabilities,
 )
 
 # ── Skills & Discovery ───────────────────────────────────────────
@@ -153,6 +154,7 @@ __all__ = [
     # Multi-modal
     "build_content_parts", "resolve_image", "resolve_media",
     "detect_mime_type", "detect_media_kind",
+    "convert_media_to_markdown", "detect_model_capabilities",
     # Storage
     "StorageBackend", "VectorBackend",
     "InMemoryBackend", "InMemoryVectorBackend",

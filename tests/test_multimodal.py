@@ -205,3 +205,86 @@ class TestAgentInferMedia:
             mock_raw.assert_awaited_once()
             _, kwargs = mock_raw.call_args
             assert kwargs["images"] == ["https://example.com/pic.png"]
+
+
+class TestModelCapabilities:
+    def test_gemini_capabilities(self):
+        from agentu import detect_model_capabilities
+        caps = detect_model_capabilities("gemini-2.5-flash")
+        assert caps["image"] is True
+        assert caps["video"] is True
+        assert caps["audio"] is True
+        assert caps["document"] is True
+
+    def test_claude_capabilities(self):
+        from agentu import detect_model_capabilities
+        caps = detect_model_capabilities("claude-3-7-sonnet-20250219")
+        assert caps["image"] is True
+        assert caps["document"] is True
+        assert caps["video"] is False
+        assert caps["audio"] is False
+
+    def test_text_only_capabilities(self):
+        from agentu import detect_model_capabilities
+        caps = detect_model_capabilities("deepseek-r1")
+        assert caps["image"] is False
+        assert caps["video"] is False
+        assert caps["audio"] is False
+        assert caps["document"] is False
+
+
+class TestMediaToMarkdown:
+    def test_custom_converter(self):
+        from agentu import convert_media_to_markdown
+        res = convert_media_to_markdown("https://example.com/clip.mp4", custom_converter=lambda s: f"# Transcribed {s}")
+        assert res == "# Transcribed https://example.com/clip.mp4"
+
+    def test_fallback_description(self):
+        from agentu import convert_media_to_markdown
+        res = convert_media_to_markdown("https://example.com/sound.mp3")
+        assert "Audio Attachment: https://example.com/sound.mp3" in res
+
+    def test_build_content_parts_with_text_model_degrades_to_string(self):
+        from agentu import build_content_parts
+        # When targeting text-only model (DeepSeek), video URL converts to Markdown text string
+        res = build_content_parts(
+            "Summarize this:",
+            media=["https://youtu.be/7Z5Vy9JBANs"],
+            model="deepseek-r1",
+            custom_converter=lambda s: "- [00:01] Keynote introduction",
+        )
+        assert isinstance(res, str)
+        assert "Summarize this:" in res
+        assert "- [00:01] Keynote introduction" in res
+
+    def test_build_content_parts_with_multimodal_model_keeps_parts(self):
+        from agentu import build_content_parts
+        # When targeting Gemini, video URL stays native video_url part
+        res = build_content_parts(
+            "Summarize this:",
+            media=["https://youtu.be/7Z5Vy9JBANs"],
+            model="gemini-2.5-flash",
+        )
+        assert isinstance(res, list)
+        assert len(res) == 2
+        assert res[0] == {"type": "text", "text": "Summarize this:"}
+        assert res[1]["type"] == "video_url"
+
+    def test_build_content_parts_claude_mixed_media(self):
+        from agentu import build_content_parts
+        # When targeting Claude: image stays native part, video degrades to markdown in prompt text
+        res = build_content_parts(
+            "Analyze both:",
+            media=[
+                "https://example.com/slide.png",
+                "https://youtu.be/7Z5Vy9JBANs",
+            ],
+            model="claude-3-7-sonnet",
+            custom_converter=lambda s: "- [00:00] Video content summary",
+        )
+        assert isinstance(res, list)
+        assert len(res) == 2
+        assert res[0]["type"] == "text"
+        assert "- [00:00] Video content summary" in res[0]["text"]
+        assert res[1]["type"] == "image_url"
+

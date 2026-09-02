@@ -4,6 +4,17 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.7.1] - 2026-09-02
+
+### Added
+
+- **Capability-Aware Markdown Degradation**: Automatic fallback for models without native video/audio support (Claude, DeepSeek, Llama, Ollama text models).
+  - Converts unsupported video links (YouTube, Vimeo, etc.) into Markdown transcripts and audio files into transcribed Markdown via `markitdown` or `youtube-transcript-api`.
+  - Seamless fallback into prompt text so non-multimodal models can seamlessly inspect and reason about media attachments.
+  - Custom media converters configurable via `agent.with_media_converter(fn)`.
+  - New optional extra: `pip install "agentu[media]"` (`markitdown`, `youtube-transcript-api`).
+  - Exports: `convert_media_to_markdown` and `detect_model_capabilities`.
+
 ## [2.7.0] - 2026-09-02
 
 ### Added
