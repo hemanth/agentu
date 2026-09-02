@@ -122,6 +122,33 @@ review = result["structured"]  # validated Review instance
 
 On validation failure, the error is fed back to the LLM for retry (controlled by `max_corrections` from guardrails).
 
+## Multimodal
+
+Pass mixed media (images, video links, audio files, documents) directly to `media=[...]`:
+
+```python
+# Unified media engine — auto-detects extensions, domains, and magic bytes
+result = await agent.infer(
+    "Analyze the keynote clip, slide chart, and podcast snippet:",
+    media=[
+        "https://youtu.be/7Z5Vy9JBANs",   # auto-detected as video
+        "./chart.png",                    # auto-detected as image (base64 encoded)
+        "./audio_memo.mp3",               # auto-detected as audio
+        "./whitepaper.pdf",               # auto-detected as document
+    ],
+)
+
+# Or pass explicit dicts for fine-grained provider options:
+result = await agent.infer(
+    "Analyze video with agentic processing:",
+    media=[
+        {"type": "video", "url": "https://youtu.be/7Z5Vy9JBANs", "processing": "agentic"}
+    ],
+)
+```
+
+`images=[...]` remains 100% backward compatible for vision-only calls.
+
 ## Context management
 
 Prevent context overflow in long-running agents:
@@ -886,6 +913,7 @@ agent.with_otel(service_name="my-app")    # OpenTelemetry GenAI spans
 
 await agent.call("tool", params)          # direct tool execution
 await agent.infer("natural language")     # multi-turn agentic loop
+await agent.infer("prompt", media=[...])  # mixed media (images, audio, video, docs)
 
 agent.remember(content, importance=0.8)   # store memory
 agent.recall(query, semantic=True)        # semantic memory search

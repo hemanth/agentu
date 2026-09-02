@@ -1,29 +1,38 @@
-"""Multi-modal example — send images alongside text prompts."""
+"""Multi-modal example — send mixed media (images, audio, video) alongside text prompts."""
 
 import asyncio
 from agentu import Agent
 
 
 async def main():
-    # Use a vision-capable model (e.g., llava, llama3.2-vision)
-    agent = Agent("vision", model="llava:latest")
+    # Use a multimodal-capable model (e.g. Gemini, GPT-4o, LLaVA)
+    agent = Agent("multimodal-agent", model="gemini-2.5-flash")
 
-    # From URL
+    # 1. Unified `media` list with image URL
     result = await agent.infer(
         "What's in this image? Describe it briefly.",
-        images=["https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"],
+        media=["https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"],
     )
-    print("URL result:", result.get("result", result))
+    print("Image result:", result.get("result", result))
 
-    # From local file
+    # 2. Video URL (YouTube, Vimeo, or .mp4)
     # result = await agent.infer(
-    #     "Describe this diagram",
-    #     images=["./diagram.png"],
+    #     "What are the key points in this video?",
+    #     media=["https://youtu.be/7Z5Vy9JBANs"],
     # )
-    # print("File result:", result.get("result", result))
+
+    # 3. Explicit dict with custom provider options
+    # result = await agent.infer(
+    #     "Analyze video with agentic processing:",
+    #     media=[{"type": "video", "url": "https://youtu.be/7Z5Vy9JBANs", "processing": "agentic"}],
+    # )
+
+    # 4. Backward-compatible `images` kwarg still works
+    # result = await agent.infer("Describe", images=["./chart.png"])
 
     await agent.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+

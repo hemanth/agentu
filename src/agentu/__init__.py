@@ -9,7 +9,10 @@ from ._core.structured import (
     pydantic_to_json_schema, build_response_format,
     parse_and_validate, format_validation_error, StructuredOutputError,
 )
-from ._core.multimodal import build_content_parts, resolve_image, detect_mime_type
+from ._core.multimodal import (
+    build_content_parts, resolve_image, resolve_media,
+    detect_mime_type, detect_media_kind,
+)
 
 # ── Skills & Discovery ───────────────────────────────────────────
 from .skills.skill import Skill, load_skill
@@ -148,7 +151,8 @@ __all__ = [
     "pydantic_to_json_schema", "build_response_format",
     "parse_and_validate", "format_validation_error", "StructuredOutputError",
     # Multi-modal
-    "build_content_parts", "resolve_image", "detect_mime_type",
+    "build_content_parts", "resolve_image", "resolve_media",
+    "detect_mime_type", "detect_media_kind",
     # Storage
     "StorageBackend", "VectorBackend",
     "InMemoryBackend", "InMemoryVectorBackend",

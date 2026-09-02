@@ -4,6 +4,17 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.7.0] - 2026-09-02
+
+### Added
+
+- **Multimodal Media Engine**: `media=[...]` is now the core multimodal engine in `agentu` supporting images, video, audio, and documents in a unified list.
+  - **Zero-config Auto-detection**: Automatically classifies media inputs by file extension (`.png`, `.mp4`, `.mp3`, `.wav`, `.pdf`), known video/audio domains (YouTube, Vimeo, Loom, TikTok, SoundCloud, Spotify), or data URIs.
+  - **Magic Byte Sniffing**: Header sniffing for local files and buffers without extensions (`PNG`, `JPEG`, `GIF`, `WEBP`, `ftyp`, `ID3`, `RIFF`, `%PDF-`).
+  - **Explicit Dict Support**: Pass custom provider parameters like `{"type": "video", "url": "...", "processing": "agentic"}` or `{"type": "image", "url": "...", "detail": "high"}` directly.
+  - **100% Backward Compatible**: `images=[...]` kwarg continues to work seamlessly on `infer()` and `stream()`.
+  - **Exports**: `resolve_media` and `detect_media_kind` exported from top-level `agentu`.
+
 ## [2.6.0] - 2026-08-12
 
 ### Added

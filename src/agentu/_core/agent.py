@@ -1337,6 +1337,7 @@ User request: {user_input}"""
         prompt: str,
         output_schema: Optional[Type] = None,
         images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
         max_retries: int = 2,
     ) -> str:
         """Make the raw HTTP call to the LLM API (no middleware/guardrails).
@@ -1354,8 +1355,8 @@ User request: {user_input}"""
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
 
-            # Build message content (plain text or multi-part with images)
-            content = build_content_parts(prompt, images)
+            # Build message content (plain text or multi-part with media)
+            content = build_content_parts(prompt, images=images, media=media)
             body: Dict[str, Any] = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": content}],
@@ -1422,6 +1423,7 @@ User request: {user_input}"""
         prompt: str,
         output_schema: Optional[Type] = None,
         images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
     ) -> str:
         """Make an LLM call with guardrails and middleware."""
         # Check input guardrails
@@ -1435,6 +1437,15 @@ User request: {user_input}"""
                 logger.debug(f"Cache hit for prompt (len={len(prompt)})")
                 return cached
 
+        async def _invoke_raw(p: str) -> str:
+            if media:
+                try:
+                    return await self._raw_llm_call(p, output_schema=output_schema, images=images, media=media)
+                except TypeError:
+                    return await self._raw_llm_call(p, output_schema=output_schema, images=images)
+            else:
+                return await self._raw_llm_call(p, output_schema=output_schema, images=images)
+
         # Run through middleware pipeline if present
         if self._middleware_chain:
             context = CallContext(
@@ -1442,12 +1453,10 @@ User request: {user_input}"""
                 namespace=self.model,
                 temperature=self.temperature,
             )
-            # Middleware wraps _raw_llm_call; pass schema/images via closure
-            async def _call(p: str) -> str:
-                return await self._raw_llm_call(p, output_schema=output_schema, images=images)
-            full_response = await self._middleware_chain.execute(context, _call)
+            # Middleware wraps _raw_llm_call; pass schema/media via closure
+            full_response = await self._middleware_chain.execute(context, _invoke_raw)
         else:
-            full_response = await self._raw_llm_call(prompt, output_schema=output_schema, images=images)
+            full_response = await _invoke_raw(prompt)
 
         # Output guardrails with self-correction loop
         if self._output_guardrails:
@@ -1476,9 +1485,7 @@ User request: {user_input}"""
                     f"Self-correcting (attempt {correction + 1}/{self._max_corrections}): "
                     f"{', '.join(f.reason for f in failures)}"
                 )
-                full_response = await self._raw_llm_call(
-                    correction_prompt, output_schema=output_schema, images=images
-                )
+                full_response = await _invoke_raw(correction_prompt)
 
         # Store in cache if enabled
         if self.cache_enabled and self.cache:
@@ -1491,6 +1498,7 @@ User request: {user_input}"""
         user_input: str,
         output_type: Type,
         images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
         """Call the LLM and validate output against a Pydantic model, retrying on failure.
 
@@ -1504,6 +1512,7 @@ User request: {user_input}"""
             user_input: Original user prompt.
             output_type: Pydantic BaseModel class to validate against.
             images: Optional image sources.
+            media: Optional media sources.
 
         Returns:
             Dict with ``result`` (raw JSON), ``structured`` (validated
@@ -1521,7 +1530,7 @@ User request: {user_input}"""
             if attempt == 0:
                 # First attempt: normal call with schema hint
                 raw = await self._call_llm(
-                    user_input, output_schema=output_type, images=images,
+                    user_input, output_schema=output_type, images=images, media=media,
                 )
             else:
                 # Retry: feed validation error back to LLM
@@ -1543,7 +1552,7 @@ User request: {user_input}"""
                     f"{str(last_error)[:200]}"
                 )
                 raw = await self._call_llm(
-                    correction_prompt, output_schema=output_type, images=images,
+                    correction_prompt, output_schema=output_type, images=images, media=media,
                 )
 
             try:
@@ -1598,6 +1607,7 @@ User request: {user_input}"""
         self,
         prompt: str,
         images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
     ) -> AsyncIterator[str]:
         """Stream LLM response chunks via SSE.
 
@@ -1612,7 +1622,7 @@ User request: {user_input}"""
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
 
-                content = build_content_parts(prompt, images)
+                content = build_content_parts(prompt, images=images, media=media)
                 session = await self._get_llm_session()
                 async with session.post(
                     f"{self.api_base}/chat/completions",
@@ -1650,6 +1660,7 @@ User request: {user_input}"""
         self,
         user_input: str,
         images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
     ) -> AsyncIterator[str]:
         """Stream inference response as text chunks.
 
@@ -1660,6 +1671,7 @@ User request: {user_input}"""
         Args:
             user_input: Natural language query
             images: Optional list of image sources (URL, data URI, or local file path)
+            media: Optional list of media sources (images, audios, videos, or explicit dicts)
 
         Yields:
             Text chunks as they arrive from the LLM
@@ -1689,7 +1701,7 @@ User request: {user_input}"""
         context = self._build_turn_context(user_input, [], active_skills)
 
         full_response = []
-        async for chunk in self._stream_llm(context, images=images):
+        async for chunk in self._stream_llm(context, images=images, media=media):
             full_response.append(chunk)
             yield chunk
 
@@ -1735,7 +1747,12 @@ User request: {user_input}"""
             {"query": user_input, "streaming": True, "response_length": len(collected)}
         )
 
-    async def evaluate_tool_use(self, user_input: str) -> Dict[str, Any]:
+    async def evaluate_tool_use(
+        self,
+        user_input: str,
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> Dict[str, Any]:
         """Evaluate which tool to use based on user input (async)."""
         prompt = f"""Context: {self.context}
 
@@ -1771,7 +1788,7 @@ Example response for calculator:
 }}"""
 
         try:
-            response = await self._call_llm(prompt)
+            response = await self._call_llm(prompt, images=images, media=media)
             # Strip markdown code fences if present
             cleaned = response.strip()
             if cleaned.startswith("```"):
@@ -2020,6 +2037,7 @@ Example response for calculator:
         output_schema: Optional[Type] = None,
         output_type: Optional[Type] = None,
         images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
         """Infer tool and parameters from natural language input.
 
@@ -2049,6 +2067,7 @@ Example response for calculator:
             output_type: Optional Pydantic BaseModel class for validated
                 structured output with auto-retry on validation failure
             images: Optional list of image sources (URL, data URI, or local file path)
+            media: Optional list of media sources (images, audios, videos, or explicit dicts)
 
         Returns:
             Dict with tool_used, parameters, reasoning, and result.
@@ -2087,7 +2106,7 @@ Example response for calculator:
                 )
 
         try:
-            return await self._infer_inner(user_input, output_schema, output_type, images)
+            return await self._infer_inner(user_input, output_schema, output_type, images=images, media=media)
         finally:
             if worktree_manager:
                 await worktree_manager.remove()
@@ -2098,6 +2117,7 @@ Example response for calculator:
         output_schema: Optional[Type] = None,
         output_type: Optional[Type] = None,
         images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
         """Inner inference logic, separated for worktree wrapping."""
 
@@ -2109,12 +2129,12 @@ Example response for calculator:
         # output_type fast path: validated Pydantic output with retry
         if output_type is not None and not self.tools:
             return await self._structured_output_with_retries(
-                user_input, output_type, images=images,
+                user_input, output_type, images=images, media=media,
             )
 
         # Structured output fast path: direct LLM call with schema
         if output_schema is not None and not self.tools:
-            raw = await self._call_llm(user_input, output_schema=output_schema, images=images)
+            raw = await self._call_llm(user_input, output_schema=output_schema, images=images, media=media)
             validated = parse_and_validate(raw, output_schema)
             result = {
                 "result": raw,
@@ -2150,7 +2170,7 @@ Example response for calculator:
 
             for attempt in range(max_corrections + 1):
                 if attempt == 0:
-                    response = await self._call_llm(prompt, images=images)
+                    response = await self._call_llm(prompt, images=images, media=media)
                 else:
                     # Self-correction: feed error back to LLM
                     correction_prompt = (
@@ -2168,7 +2188,7 @@ Example response for calculator:
                     logger.info(
                         f"Codemode self-correcting (attempt {attempt}/{max_corrections})"
                     )
-                    response = await self._call_llm(correction_prompt, images=images)
+                    response = await self._call_llm(correction_prompt, images=images, media=media)
 
                 # Extract code from LLM response (strip markdown fences)
                 code = response.strip()
@@ -2236,7 +2256,13 @@ Example response for calculator:
             # Build context from previous turns (includes skill instructions if active)
             context = self._build_turn_context(user_input, turn_history, active_skills)
 
-            evaluation = await self.evaluate_tool_use(context)
+            if images or media:
+                try:
+                    evaluation = await self.evaluate_tool_use(context, images=images, media=media)
+                except TypeError:
+                    evaluation = await self.evaluate_tool_use(context)
+            else:
+                evaluation = await self.evaluate_tool_use(context)
 
             # Check for text_response (model is done, no more tool calls)
             if evaluation.get("text_response"):
