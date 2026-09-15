@@ -71,6 +71,12 @@ class TestLLMCache:
         
         assert cache.get("prompt", "model", temperature=1.0) == "response-hot"
         assert cache.get("prompt", "model", temperature=0.0) == "response-cold"
+
+    def test_cache_key_includes_request_context(self, cache):
+        cache.set("describe", "model", "first image", request_fingerprint="image-a")
+
+        assert cache.get("describe", "model", request_fingerprint="image-a") == "first image"
+        assert cache.get("describe", "model", request_fingerprint="image-b") is None
     
     def test_cache_expiration(self, tmp_path):
         """Test that expired entries are not returned."""
@@ -194,4 +200,3 @@ class TestLLMCacheConversation:
         cache.set(conversation, "model", "cached")
         cache.invalidate(conversation, "model")
         assert cache.get(conversation, "model") is None
-

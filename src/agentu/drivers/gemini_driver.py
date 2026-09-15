@@ -29,14 +29,34 @@ class GeminiDriver(BaseDriver):
             timeout=timeout,
         )
 
+    @property
+    def capabilities(self) -> Dict[str, bool]:
+        return {"image": True, "audio": True, "video": True, "document": True}
+
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
         """Convert OpenAI-style messages into Gemini contents & system instruction."""
         system_instruction = None
         contents = []
+        tool_names: Dict[str, str] = {}
 
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content", "")
+
+            if role == "tool":
+                call_id = msg.get("tool_call_id", "")
+                name = msg.get("name") or tool_names.get(call_id, "unknown_tool")
+                contents.append({
+                    "role": "function",
+                    "parts": [{
+                        "functionResponse": {
+                            "id": call_id,
+                            "name": name,
+                            "response": {"result": content},
+                        }
+                    }],
+                })
+                continue
 
             if role == "system":
                 system_instruction = {"parts": [{"text": str(content)}]}
@@ -46,7 +66,8 @@ class GeminiDriver(BaseDriver):
 
             parts = []
             if isinstance(content, str):
-                parts.append({"text": content})
+                if content:
+                    parts.append({"text": content})
             elif isinstance(content, list):
                 for part in content:
                     if part.get("type") == "text":
@@ -65,10 +86,69 @@ class GeminiDriver(BaseDriver):
                     elif part.get("type") == "audio_url":
                         url = part.get("audio_url", {}).get("url", "")
                         parts.append({"file_data": {"file_uri": url}})
+                    elif part.get("type") == "document":
+                        document = part.get("document", {})
+                        url = document.get("url", "")
+                        if url.startswith("data:"):
+                            mime, b64 = url.split(";base64,", 1)
+                            parts.append({
+                                "inline_data": {
+                                    "mime_type": mime.replace("data:", ""),
+                                    "data": b64,
+                                }
+                            })
+                        else:
+                            parts.append({"file_data": {"file_uri": url}})
+
+            for tool_call in msg.get("tool_calls", []):
+                function = tool_call.get("function", {})
+                call_id = tool_call.get("id", "")
+                name = function.get("name", "")
+                tool_names[call_id] = name
+                arguments = function.get("arguments", {})
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                parts.append({
+                    "functionCall": {"id": call_id, "name": name, "args": arguments}
+                })
 
             contents.append({"role": gemini_role, "parts": parts})
 
         return system_instruction, contents
+
+    @staticmethod
+    def _convert_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        declarations = []
+        for tool in tools:
+            function = tool.get("function", tool)
+            declarations.append({
+                "name": function["name"],
+                "description": function.get("description", ""),
+                "parametersJsonSchema": function.get(
+                    "parameters", {"type": "object", "properties": {}}
+                ),
+            })
+        return [{"functionDeclarations": declarations}]
+
+    @staticmethod
+    def _parse_tool_calls(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        calls = []
+        for index, part in enumerate(parts):
+            function_call = part.get("functionCall")
+            if not function_call:
+                continue
+            calls.append({
+                "id": function_call.get("id") or f"gemini_call_{index}",
+                "type": "function",
+                "function": {
+                    "name": function_call.get("name", ""),
+                    "arguments": json.dumps(function_call.get("args", {})),
+                },
+            })
+        return calls
 
     async def call(
         self,
@@ -96,6 +176,8 @@ class GeminiDriver(BaseDriver):
         if output_schema:
             body["generationConfig"]["responseMimeType"] = "application/json"
             body["generationConfig"]["responseSchema"] = output_schema
+        if tools:
+            body["tools"] = self._convert_tools(tools)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -111,12 +193,13 @@ class GeminiDriver(BaseDriver):
         cand = candidates[0] if candidates else {}
         parts = cand.get("content", {}).get("parts", [])
         text = "".join(p.get("text", "") for p in parts)
+        tool_calls = self._parse_tool_calls(parts)
         usage = data.get("usageMetadata", {})
 
         return DriverResponse(
             text=text,
             raw=data,
-            tool_calls=[],
+            tool_calls=tool_calls,
             prompt_tokens=usage.get("promptTokenCount", 0),
             completion_tokens=usage.get("candidatesTokenCount", 0),
             model=model_name,
@@ -143,6 +226,8 @@ class GeminiDriver(BaseDriver):
         }
         if sys_inst:
             body["systemInstruction"] = sys_inst
+        if tools:
+            body["tools"] = self._convert_tools(tools)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(

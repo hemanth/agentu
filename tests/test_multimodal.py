@@ -206,6 +206,21 @@ class TestAgentInferMedia:
             _, kwargs = mock_raw.call_args
             assert kwargs["images"] == ["https://example.com/pic.png"]
 
+    @pytest.mark.asyncio
+    async def test_cache_distinguishes_identical_prompts_with_different_images(self):
+        agent = _make_agent()
+        agent.cache_enabled = True
+        agent.cache = AsyncMock()
+        agent.cache.get.return_value = None
+
+        with patch.object(agent, "_raw_llm_call", AsyncMock(return_value="description")):
+            await agent._call_llm("Describe this", images=["https://example.com/a.png"])
+            await agent._call_llm("Describe this", images=["https://example.com/b.png"])
+
+        first_options = agent.cache.get.await_args_list[0].kwargs
+        second_options = agent.cache.get.await_args_list[1].kwargs
+        assert first_options["request_fingerprint"] != second_options["request_fingerprint"]
+
 
 class TestModelCapabilities:
     def test_gemini_capabilities(self):
@@ -231,6 +246,32 @@ class TestModelCapabilities:
         assert caps["video"] is False
         assert caps["audio"] is False
         assert caps["document"] is False
+
+    def test_unknown_model_capabilities_are_conservative(self):
+        from agentu import detect_model_capabilities
+
+        caps = detect_model_capabilities("custom-provider-model")
+        assert not any(caps.values())
+
+    def test_openai_chat_capabilities_do_not_claim_video_or_documents(self):
+        from agentu import detect_model_capabilities
+
+        caps = detect_model_capabilities("gpt-5")
+        assert caps["image"] is True
+        assert caps["video"] is False
+        assert caps["document"] is False
+
+    def test_driver_capabilities_match_transport_support(self):
+        from agentu import ClaudeDriver, GeminiDriver, OpenAIDriver
+
+        assert all(GeminiDriver().capabilities.values())
+        assert ClaudeDriver().capabilities == {
+            "image": True,
+            "audio": False,
+            "video": False,
+            "document": True,
+        }
+        assert OpenAIDriver(model="gpt-5").capabilities["video"] is False
 
 
 class TestMediaToMarkdown:
@@ -270,6 +311,20 @@ class TestMediaToMarkdown:
         assert res[0] == {"type": "text", "text": "Summarize this:"}
         assert res[1]["type"] == "video_url"
 
+    def test_openai_compatible_agent_degrades_video_even_for_gpt(self):
+        from agentu._core.agent_transport import _openai_compatible_capabilities
+
+        res = build_content_parts(
+            "Summarize:",
+            media=["https://example.com/clip.mp4"],
+            model="gpt-5",
+            capabilities=_openai_compatible_capabilities("gpt-5"),
+            custom_converter=lambda source: "Video transcript",
+        )
+
+        assert isinstance(res, str)
+        assert "Video transcript" in res
+
     def test_build_content_parts_claude_mixed_media(self):
         from agentu import build_content_parts
         # When targeting Claude: image stays native part, video degrades to markdown in prompt text
@@ -287,4 +342,3 @@ class TestMediaToMarkdown:
         assert res[0]["type"] == "text"
         assert "- [00:00] Video content summary" in res[0]["text"]
         assert res[1]["type"] == "image_url"
-

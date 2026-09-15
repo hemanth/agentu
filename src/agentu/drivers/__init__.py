@@ -2,7 +2,7 @@
 
 import os
 from typing import Optional
-from .base import BaseDriver, DriverResponse
+from .base import BaseDriver, DriverResponse, GeneratedImage, ImageGenerationResponse
 from .openai_driver import OpenAIDriver
 from .gemini_driver import GeminiDriver
 from .claude_driver import ClaudeDriver
@@ -51,8 +51,7 @@ def get_driver_for_model(
 
 
 __all__ = [
-    "BaseDriver",
-    "DriverResponse",
+    "BaseDriver", "DriverResponse", "GeneratedImage", "ImageGenerationResponse",
     "OpenAIDriver",
     "GeminiDriver",
     "ClaudeDriver",

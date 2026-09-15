@@ -33,6 +33,14 @@ class OllamaDriver(BaseDriver):
         )
         self.keep_alive = keep_alive
 
+    @property
+    def capabilities(self) -> Dict[str, bool]:
+        model = (self.model or "").lower()
+        vision = any(name in model for name in (
+            "llava", "vision", "qwen-vl", "qwen2.5-vl", "minicpm", "moondream", "bakllava"
+        ))
+        return {"image": vision, "audio": False, "video": False, "document": False}
+
     async def call(
         self,
         messages: List[Dict[str, Any]],

@@ -1,6 +1,7 @@
 import json
 import asyncio
 import aiohttp
+import hashlib
 from typing import AsyncIterator, List, Dict, Any, Optional, Callable, Type, Union
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -12,7 +13,8 @@ from .structured import (
     format_validation_error,
     StructuredOutputError,
 )
-from .multimodal import build_content_parts
+from ..drivers.base import BaseDriver
+from .agent_transport import TransportMixin
 
 from .tools import Tool, ToolPermission
 from .safety import check_lethal_trifecta, spotlight_untrusted
@@ -38,6 +40,38 @@ except ImportError:  # pragma: no cover
     _cosine_similarity = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+
+def _cache_request_fingerprint(
+    images: Optional[List[str]],
+    media: Optional[List[Union[str, Dict[str, Any]]]],
+    output_schema: Optional[Type],
+) -> Optional[str]:
+    """Fingerprint request inputs that affect an otherwise identical prompt."""
+    if not images and not media and output_schema is None:
+        return None
+
+    def identify_source(source: Any) -> Any:
+        if isinstance(source, dict):
+            return source
+        if isinstance(source, str) and not source.startswith(("http://", "https://", "data:")):
+            from pathlib import Path
+
+            path = Path(source).expanduser()
+            if path.is_file():
+                return {
+                    "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "source": str(path.resolve()),
+                }
+        return source
+
+    request_context = {
+        "images": [identify_source(source) for source in images or []],
+        "media": [identify_source(source) for source in media or []],
+        "output_schema": build_response_format(output_schema) if output_schema is not None else None,
+    }
+    encoded = json.dumps(request_context, sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 async def get_ollama_models(api_base: str = "http://localhost:11434") -> List[str]:
@@ -104,7 +138,7 @@ from .agent_workflow import WorkflowMixin
 from .agent_storage import StorageMixin
 
 
-class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, StorageMixin):
+class Agent(TransportMixin, MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, StorageMixin):
     def __init__(self, name: str, model: Optional[str] = None, temperature: float = 0.7,
                  mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
                  enable_memory: bool = True, memory_path: Optional[str] = None,
@@ -115,7 +149,8 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
                  enable_rationale_recording: bool = False,
                  codemode: bool = False,
                  auto_discover_rules: bool = True,
-                 rules_dir: Optional[str] = None):
+                 rules_dir: Optional[str] = None,
+                 driver: Optional[BaseDriver] = None):
         """Initialize an Agent.
 
         Args:
@@ -144,21 +179,28 @@ class Agent(MemoryMixin, SandboxMixin, HooksMixin, ContextMixin, WorkflowMixin, 
                                  .claude/CLAUDE.md in order. (default: True)
             rules_dir: Directory to start rule discovery from (default: current working
                        directory). Only used when auto_discover_rules is True.
+            driver: Optional provider driver. When supplied, all LLM calls and streams
+                    use it instead of the built-in OpenAI-compatible transport.
         """
         self.name = name
         self.codemode = codemode
-        self.api_base = api_base.rstrip('/')
-        self.api_key = api_key
+        self.driver = driver
+        self.api_base = (driver.api_base or api_base).rstrip('/') if driver else api_base.rstrip('/')
+        self.api_key = driver.api_key if driver else api_key
 
         # Auto-detect model if not specified
-        if model is None:
+        if driver is not None:
+            if model is not None:
+                driver.model = model
+            self.model = driver.model or model or "qwen3:latest"
+        elif model is None:
             # Extract base URL without /v1 suffix for Ollama API
             ollama_base = self.api_base.replace('/v1', '')
             self.model = get_default_model(ollama_base)
         else:
             self.model = model
 
-        self.temperature = temperature
+        self.temperature = driver.temperature if driver else temperature
         self.tools: List[Tool] = []
         self.deferred_tools: List[Tool] = []
         self.skills: List[Skill] = []  # Progressive loading skills
@@ -1329,104 +1371,6 @@ User request: {user_input}"""
 
         return output if output else "(no output)"
 
-    async def _get_llm_session(self) -> aiohttp.ClientSession:
-        """Get or create reusable aiohttp session for LLM calls."""
-        if self._llm_session is None or self._llm_session.closed:
-            self._llm_session = aiohttp.ClientSession()
-        return self._llm_session
-
-    async def _raw_llm_call(
-        self,
-        prompt: str,
-        output_schema: Optional[Type] = None,
-        images: Optional[List[str]] = None,
-        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-        max_retries: int = 2,
-    ) -> str:
-        """Make the raw HTTP call to the LLM API (no middleware/guardrails).
-        
-        Retries automatically on transient failures (429, 500, 502, 503, 504)
-        with exponential backoff.
-        """
-        RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
-
-        with self.observer.trace(
-            EventType.LLM_REQUEST,
-            {"model": self.model, "prompt_length": len(prompt)}
-        ):
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-
-            # Build message content (plain text or multi-part with media)
-            content = build_content_parts(
-                prompt,
-                images=images,
-                media=media,
-                model=self.model,
-                custom_converter=getattr(self, "_media_converter", None),
-            )
-            body: Dict[str, Any] = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": content}],
-                "temperature": self.temperature,
-                "stream": False,
-            }
-
-            # Add structured output response_format if schema provided
-            if output_schema is not None:
-                body["response_format"] = build_response_format(output_schema)
-
-            last_error = None
-            for attempt in range(max_retries + 1):
-                try:
-                    session = await self._get_llm_session()
-                    async with session.post(
-                        f"{self.api_base}/chat/completions",
-                        json=body,
-                        headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as response:
-                        if response.status in RETRYABLE_STATUSES and attempt < max_retries:
-                            delay = (2 ** attempt) * 1.0  # 1s, 2s
-                            logger.warning(
-                                f"LLM API returned {response.status}, retrying in {delay}s "
-                                f"(attempt {attempt + 1}/{max_retries})"
-                            )
-                            await asyncio.sleep(delay)
-                            continue
-
-                        response.raise_for_status()
-                        response_json = await response.json()
-
-                        if "error" in response_json:
-                            logger.error(f"API error: {response_json['error']}")
-                            raise Exception(response_json['error'])
-
-                        full_response = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
-
-                        if not full_response:
-                            logger.error("Empty response from API")
-                            raise Exception("Empty response from API")
-
-                        return full_response
-
-                except aiohttp.ClientError as e:
-                    last_error = e
-                    if attempt < max_retries:
-                        delay = (2 ** attempt) * 1.0
-                        logger.warning(
-                            f"LLM API connection error: {e}, retrying in {delay}s "
-                            f"(attempt {attempt + 1}/{max_retries})"
-                        )
-                        await asyncio.sleep(delay)
-                    else:
-                        logger.error(f"LLM API failed after {max_retries + 1} attempts: {e}")
-                        raise
-
-            # Should not reach here, but just in case
-            raise last_error or Exception("LLM call failed after retries")
-
     async def _call_llm(
         self,
         prompt: str,
@@ -1435,13 +1379,18 @@ User request: {user_input}"""
         media: Optional[List[Union[str, Dict[str, Any]]]] = None,
     ) -> str:
         """Make an LLM call with guardrails and middleware."""
+        request_fingerprint = _cache_request_fingerprint(images, media, output_schema)
+        cache_options = {
+            "temperature": self.temperature,
+            "request_fingerprint": request_fingerprint,
+        }
         # Check input guardrails
         if self._input_guardrails:
             self._input_guardrails.check_or_raise(prompt, direction="input")
 
         # Check cache first if enabled
         if self.cache_enabled and self.cache:
-            cached = await self.cache.get(prompt, self.model, temperature=self.temperature)
+            cached = await self.cache.get(prompt, self.model, **cache_options)
             if cached is not None:
                 logger.debug(f"Cache hit for prompt (len={len(prompt)})")
                 return cached
@@ -1498,7 +1447,7 @@ User request: {user_input}"""
 
         # Store in cache if enabled
         if self.cache_enabled and self.cache:
-            await self.cache.set(prompt, self.model, full_response, temperature=self.temperature)
+            await self.cache.set(prompt, self.model, full_response, **cache_options)
 
         return full_response
 
@@ -1611,65 +1560,6 @@ User request: {user_input}"""
             attempts=max_retries + 1,
             last_error=str(last_error),
         )
-
-    async def _stream_llm(
-        self,
-        prompt: str,
-        images: Optional[List[str]] = None,
-        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-    ) -> AsyncIterator[str]:
-        """Stream LLM response chunks via SSE.
-
-        Yields text chunks as they arrive from the OpenAI-compatible API.
-        """
-        with self.observer.trace(
-            EventType.LLM_REQUEST,
-            {"model": self.model, "prompt_length": len(prompt), "streaming": True}
-        ):
-            try:
-                headers = {"Content-Type": "application/json"}
-                if self.api_key:
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-
-                content = build_content_parts(
-                    prompt,
-                    images=images,
-                    media=media,
-                    model=self.model,
-                    custom_converter=getattr(self, "_media_converter", None),
-                )
-                session = await self._get_llm_session()
-                async with session.post(
-                    f"{self.api_base}/chat/completions",
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": content}],
-                        "temperature": self.temperature,
-                        "stream": True
-                    },
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=120)
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.content:
-                        decoded = line.decode("utf-8").strip()
-                        if not decoded or not decoded.startswith("data: "):
-                            continue
-                        data = decoded[6:]  # strip "data: "
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            content_chunk = delta.get("content")
-                            if content_chunk:
-                                yield content_chunk
-                        except json.JSONDecodeError:
-                            continue
-
-            except aiohttp.ClientError as e:
-                logger.error(f"Error streaming LLM API: {str(e)}")
-                raise
 
     async def stream(
         self,

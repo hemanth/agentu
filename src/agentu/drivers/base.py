@@ -1,8 +1,9 @@
-"""Base driver protocol and message structures for zero-dependency LLM adapters."""
+"""Base driver protocol and response structures for LLM adapters."""
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Dict, Any, List, Optional
+from typing import AsyncIterator, Dict, Any, List, Optional, Union
 
 
 @dataclass
@@ -14,6 +15,36 @@ class DriverResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     model: str = ""
+
+
+@dataclass
+class GeneratedImage:
+    """One image returned by an image-generation provider."""
+
+    data: Optional[bytes] = None
+    url: Optional[str] = None
+    revised_prompt: Optional[str] = None
+    mime_type: str = "image/png"
+
+    def save(self, path: Union[str, Path], *, overwrite: bool = False) -> Path:
+        """Save an inline image without silently overwriting an existing file."""
+        if self.data is None:
+            raise ValueError("This generated image contains a URL, not inline image data")
+        destination = Path(path)
+        if destination.exists() and not overwrite:
+            raise FileExistsError(f"Image already exists: {destination}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(self.data)
+        return destination
+
+
+@dataclass
+class ImageGenerationResponse:
+    """Normalized image-generation result."""
+
+    images: List[GeneratedImage]
+    model: str = ""
+    raw: Dict[str, Any] = field(default_factory=dict)
 
 
 class BaseDriver(ABC):
@@ -32,6 +63,11 @@ class BaseDriver(ABC):
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
+
+    @property
+    def capabilities(self) -> Dict[str, bool]:
+        """Media inputs this concrete transport can encode safely."""
+        return {"image": False, "audio": False, "video": False, "document": False}
 
     @abstractmethod
     async def call(
@@ -54,3 +90,9 @@ class BaseDriver(ABC):
     ) -> AsyncIterator[str]:
         """Stream completion text tokens from the provider."""
         pass
+
+    async def generate_image(self, prompt: str, **kwargs) -> ImageGenerationResponse:
+        """Generate images when supported by the provider."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement image generation"
+        )

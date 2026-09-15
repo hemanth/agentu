@@ -40,8 +40,19 @@ class TieredCache:
         return prompt
 
     def _make_key(self, prompt: Prompt, namespace: str, **kwargs) -> str:
-        key_data = {"prompt": self._normalize_prompt(prompt), "model": namespace, "temperature": kwargs.get("temperature")}
-        return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
+        key_data = {
+            "prompt": self._normalize_prompt(prompt),
+            "model": namespace,
+            "temperature": kwargs.get("temperature"),
+            **{
+                key: value
+                for key, value in kwargs.items()
+                if key != "temperature" and value is not None
+            },
+        }
+        return hashlib.sha256(
+            json.dumps(key_data, sort_keys=True, default=str).encode()
+        ).hexdigest()
 
     async def get(self, prompt: Prompt, namespace: str, **kwargs) -> Optional[str]:
         cache_key = self._make_key(prompt, namespace, **kwargs)
@@ -60,7 +71,7 @@ class TieredCache:
                 return result.get("response")
 
         # Try semantic match
-        if self.semantic_index is not None:
+        if self.semantic_index is not None and not self._has_request_context(kwargs):
             matched_key = await self.semantic_index.search(prompt)
             if matched_key is not None:
                 for backend in self.backends:
@@ -80,7 +91,7 @@ class TieredCache:
         for backend in self.backends:
             await backend.set(cache_key, value, ttl=self.ttl)
 
-        if self.semantic_index is not None:
+        if self.semantic_index is not None and not self._has_request_context(kwargs):
             await self.semantic_index.add(prompt, cache_key)
 
         self._dirty = True
@@ -91,6 +102,11 @@ class TieredCache:
 
     def clear_dirty(self):
         self._dirty = False
+
+    @staticmethod
+    def _has_request_context(kwargs: Dict[str, Any]) -> bool:
+        """Return whether non-text inputs make semantic matching unsafe."""
+        return any(key != "temperature" and value is not None for key, value in kwargs.items())
 
     async def clear(self) -> None:
         for backend in self.backends:

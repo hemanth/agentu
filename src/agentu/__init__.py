@@ -1,5 +1,7 @@
 """agentu - A flexible Python package for creating AI agents with customizable tools."""
 
+from importlib.metadata import PackageNotFoundError, version
+
 # ── Core (always available) ──────────────────────────────────────
 from ._core.agent import Agent
 from ._core.result import InferResult
@@ -16,7 +18,7 @@ from ._core.multimodal import (
     convert_media_to_markdown, detect_model_capabilities,
 )
 from .drivers import (
-    BaseDriver, DriverResponse,
+    BaseDriver, DriverResponse, GeneratedImage, ImageGenerationResponse,
     OpenAIDriver, GeminiDriver, ClaudeDriver, OllamaDriver,
     get_driver_for_model,
 )
@@ -113,7 +115,10 @@ def __getattr__(name: str):
     raise AttributeError(f"module 'agentu' has no attribute {name!r}")
 
 
-__version__ = "1.20.0"
+try:
+    __version__ = version("agentu")
+except PackageNotFoundError:  # Source tree used without an installed distribution.
+    __version__ = "0+unknown"
 __all__ = [
     # Core
     "Agent", "AgentConfig", "Tool", "ToolPermission",
@@ -164,6 +169,7 @@ __all__ = [
     "convert_media_to_markdown", "detect_model_capabilities",
     # Drivers
     "BaseDriver", "DriverResponse",
+    "GeneratedImage", "ImageGenerationResponse",
     "OpenAIDriver", "GeminiDriver", "ClaudeDriver", "OllamaDriver",
     "get_driver_for_model",
     # Storage

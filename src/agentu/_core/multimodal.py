@@ -309,8 +309,7 @@ def detect_model_capabilities(model: Optional[str]) -> Dict[str, bool]:
         Dict mapping media kind ('image', 'audio', 'video', 'document') to bool.
     """
     if not model:
-        # Unknown/unspecified model — assume full multimodal support
-        return {"image": True, "audio": True, "video": True, "document": True}
+        return {"image": False, "audio": False, "video": False, "document": False}
 
     m = model.lower()
 
@@ -318,9 +317,16 @@ def detect_model_capabilities(model: Optional[str]) -> Dict[str, bool]:
     if "gemini" in m:
         return {"image": True, "audio": True, "video": True, "document": True}
 
-    # GPT-4o / GPT-4.5 / GPT-5
-    if "gpt-4o" in m or "gpt-4.5" in m or "gpt-5" in m or "o1" in m or "o3" in m:
-        return {"image": True, "audio": "audio" in m, "video": True, "document": True}
+    # OpenAI chat models accept image input, but not native video/document parts.
+    if any(name in m for name in (
+        "gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5", "gpt-6", "o1", "o3", "o4"
+    )):
+        return {
+            "image": True,
+            "audio": "audio" in m or "realtime" in m,
+            "video": False,
+            "document": False,
+        }
 
     # Claude models support images and documents natively, but not raw video_url or input_audio
     if "claude" in m:
@@ -328,7 +334,7 @@ def detect_model_capabilities(model: Optional[str]) -> Dict[str, bool]:
 
     # Vision-capable open/Ollama models (LLaVA, Qwen-VL, MiniCPM-V, etc.)
     if any(v in m for v in ("llava", "vision", "qwen-vl", "qwen2.5-vl", "minicpm", "moondream", "bakllava")):
-        return {"image": True, "audio": False, "video": "video" in m or "vl" in m, "document": False}
+        return {"image": True, "audio": False, "video": False, "document": False}
 
     # Default text-only LLMs (e.g. Llama, Qwen-Coder, Mistral, DeepSeek, Phi, Gemma)
     return {"image": False, "audio": False, "video": False, "document": False}
@@ -421,6 +427,7 @@ def build_content_parts(
     model: Optional[str] = None,
     auto_convert_markdown: bool = True,
     custom_converter: Optional[Any] = None,
+    capabilities: Optional[Dict[str, bool]] = None,
 ) -> Union[str, List[Dict[str, Any]]]:
     """Build OpenAI/GenAI-compatible content array or auto-convert to Markdown for non-multimodal models.
 
@@ -435,6 +442,8 @@ def build_content_parts(
         model: Optional model name to check capabilities against
         auto_convert_markdown: If True, transcode unsupported media into Markdown
         custom_converter: Optional custom callable to convert media to Markdown
+        capabilities: Optional transport-provided media capability map. Takes
+            precedence over model-name detection.
 
     Returns:
         Plain string or list of content parts
@@ -449,7 +458,9 @@ def build_content_parts(
         return text
 
     # Check model capabilities if model is specified
-    caps = detect_model_capabilities(model) if model and auto_convert_markdown else None
+    caps = capabilities
+    if caps is None and model and auto_convert_markdown:
+        caps = detect_model_capabilities(model)
 
     native_parts: List[Dict[str, Any]] = []
     converted_markdown: List[str] = []

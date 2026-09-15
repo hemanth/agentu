@@ -114,13 +114,17 @@ class LLMCache:
 
     def _make_key(self, prompt: Prompt, namespace: str, **kwargs) -> str:
         """Create a cache key from prompt and namespace."""
-        # Include relevant kwargs in the key (temperature, etc.)
         key_data = {
             "prompt": self._normalize_prompt(prompt),
             "model": namespace,
             "temperature": kwargs.get("temperature"),
+            **{
+                key: value
+                for key, value in kwargs.items()
+                if key != "temperature" and value is not None
+            },
         }
-        key_str = json.dumps(key_data, sort_keys=True)
+        key_str = json.dumps(key_data, sort_keys=True, default=str)
         return hashlib.sha256(key_str.encode()).hexdigest()
     
     def get(self, prompt: Prompt, namespace: str, **kwargs) -> Optional[str]:

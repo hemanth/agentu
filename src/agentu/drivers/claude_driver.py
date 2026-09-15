@@ -29,6 +29,10 @@ class ClaudeDriver(BaseDriver):
             timeout=timeout,
         )
 
+    @property
+    def capabilities(self) -> Dict[str, bool]:
+        return {"image": True, "audio": False, "video": False, "document": True}
+
     def _headers(self) -> Dict[str, str]:
         headers = {
             "Content-Type": "application/json",
@@ -51,10 +55,26 @@ class ClaudeDriver(BaseDriver):
                 system_text = str(content)
                 continue
 
+            if role == "tool":
+                claude_msgs.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": msg.get("tool_call_id", ""),
+                        "content": str(content),
+                    }],
+                })
+                continue
+
             claude_role = "assistant" if role in ("assistant", "model") else "user"
 
             if isinstance(content, str):
-                claude_msgs.append({"role": claude_role, "content": content})
+                if msg.get("tool_calls"):
+                    parts = [{"type": "text", "text": content}] if content else []
+                    parts.extend(self._convert_tool_uses(msg["tool_calls"]))
+                    claude_msgs.append({"role": claude_role, "content": parts})
+                else:
+                    claude_msgs.append({"role": claude_role, "content": content})
             elif isinstance(content, list):
                 parts = []
                 for part in content:
@@ -69,9 +89,80 @@ class ClaudeDriver(BaseDriver):
                                 "type": "image",
                                 "source": {"type": "base64", "media_type": mime_type, "data": b64},
                             })
+                        elif url:
+                            parts.append({
+                                "type": "image",
+                                "source": {"type": "url", "url": url},
+                            })
+                    elif part.get("type") == "document":
+                        document = part.get("document", {})
+                        url = document.get("url", "")
+                        if url.startswith("data:"):
+                            mime, b64 = url.split(";base64,", 1)
+                            parts.append({
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": mime.replace("data:", ""),
+                                    "data": b64,
+                                },
+                            })
+                        elif url:
+                            parts.append({
+                                "type": "document",
+                                "source": {"type": "url", "url": url},
+                            })
                 claude_msgs.append({"role": claude_role, "content": parts})
 
         return system_text, claude_msgs
+
+    @staticmethod
+    def _convert_tool_uses(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        blocks = []
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            blocks.append({
+                "type": "tool_use",
+                "id": tool_call.get("id", ""),
+                "name": function.get("name", ""),
+                "input": arguments,
+            })
+        return blocks
+
+    @staticmethod
+    def _convert_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        converted = []
+        for tool in tools:
+            function = tool.get("function", tool)
+            converted.append({
+                "name": function["name"],
+                "description": function.get("description", ""),
+                "input_schema": function.get(
+                    "parameters", {"type": "object", "properties": {}}
+                ),
+            })
+        return converted
+
+    @staticmethod
+    def _parse_tool_calls(content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "id": block.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": block.get("name", ""),
+                    "arguments": json.dumps(block.get("input", {})),
+                },
+            }
+            for block in content
+            if block.get("type") == "tool_use"
+        ]
 
     async def call(
         self,
@@ -93,6 +184,8 @@ class ClaudeDriver(BaseDriver):
         }
         if sys_text:
             body["system"] = sys_text
+        if tools:
+            body["tools"] = self._convert_tools(tools)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -115,7 +208,7 @@ class ClaudeDriver(BaseDriver):
         return DriverResponse(
             text=text,
             raw=data,
-            tool_calls=[],
+            tool_calls=self._parse_tool_calls(data.get("content", [])),
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
             model=data.get("model", self.model or ""),
@@ -139,6 +232,8 @@ class ClaudeDriver(BaseDriver):
         }
         if sys_text:
             body["system"] = sys_text
+        if tools:
+            body["tools"] = self._convert_tools(tools)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(

@@ -1,11 +1,12 @@
 """OpenAI-compatible protocol driver (OpenAI, DeepSeek, Groq, vLLM, Ollama-v1)."""
 
 import json
+import base64
 import logging
 from typing import AsyncIterator, Dict, Any, List, Optional
 import aiohttp
 
-from .base import BaseDriver, DriverResponse
+from .base import BaseDriver, DriverResponse, GeneratedImage, ImageGenerationResponse
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,19 @@ class OpenAIDriver(BaseDriver):
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
+
+    @property
+    def capabilities(self) -> Dict[str, bool]:
+        model = (self.model or "").lower()
+        vision = any(name in model for name in (
+            "gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5", "gpt-6", "o1", "o3", "o4"
+        ))
+        return {
+            "image": vision,
+            "audio": "audio" in model or "realtime" in model,
+            "video": False,
+            "document": False,
+        }
 
     async def call(
         self,
@@ -82,6 +96,59 @@ class OpenAIDriver(BaseDriver):
             completion_tokens=usage.get("completion_tokens", 0),
             model=data.get("model", self.model or ""),
         )
+
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        model: str = "gpt-image-2",
+        size: Optional[str] = None,
+        quality: Optional[str] = None,
+        n: int = 1,
+        output_format: Optional[str] = None,
+        background: Optional[str] = None,
+        **kwargs,
+    ) -> ImageGenerationResponse:
+        """Generate images through an OpenAI-compatible Images API."""
+        if not prompt.strip():
+            raise ValueError("Image prompt must not be empty")
+        if n < 1:
+            raise ValueError("n must be at least 1")
+
+        body: Dict[str, Any] = {"model": model, "prompt": prompt, "n": n, **kwargs}
+        for key, value in {
+            "size": size,
+            "quality": quality,
+            "output_format": output_format,
+            "background": background,
+        }.items():
+            if value is not None:
+                body[key] = value
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self.api_base}/images/generations",
+                json=body,
+                headers=self._headers(),
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+            ) as resp:
+                resp.raise_for_status()
+                payload = await resp.json()
+
+        image_format = output_format or "png"
+        mime_type = "image/jpeg" if image_format in ("jpg", "jpeg") else f"image/{image_format}"
+        images = []
+        for item in payload.get("data", []):
+            encoded = item.get("b64_json")
+            images.append(GeneratedImage(
+                data=base64.b64decode(encoded) if encoded else None,
+                url=item.get("url"),
+                revised_prompt=item.get("revised_prompt"),
+                mime_type=mime_type,
+            ))
+        if not images:
+            raise ValueError("Image API returned no images")
+        return ImageGenerationResponse(images=images, model=model, raw=payload)
 
     async def stream(
         self,

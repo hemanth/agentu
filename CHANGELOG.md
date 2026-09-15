@@ -4,6 +4,27 @@ All notable changes to agentu will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.9.0] - 2026-09-15
+
+### Added
+
+- Native single-image and batch image generation through OpenAI-compatible Images APIs.
+- Non-destructive image saving with optional one-call `output_path` support.
+- Injectable provider drivers for inference, structured output, multimodal input, and streaming.
+- Native Gemini and Claude tool definitions, tool-call parsing, and tool-result round trips.
+
+### Fixed
+
+- Corrected the installed `agentu` CLI entry point and runtime version reporting.
+- Included media and structured-output context in cache identity to prevent cross-request collisions.
+- Aligned the minimum supported Python version and media dependencies on Python 3.10+.
+- Made multimodal capability detection conservative and transport-aware.
+
+### Changed
+
+- Extracted LLM transport, retry, provider dispatch, and SSE handling from the core `Agent` class.
+
 ## [2.8.0] - 2026-09-02
 
 ### Added

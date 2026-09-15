@@ -25,6 +25,39 @@ result = await agent.infer("Find me laptops under $1500")
 
 `call()` runs a tool. `infer()` runs a multi-turn agentic loop — the LLM picks tools, calls them, sees results, and keeps going until the task is done or `max_turns` is hit.
 
+### Native provider drivers
+
+Inject a driver when the provider does not expose an OpenAI-compatible endpoint:
+
+```python
+from agentu import Agent, GeminiDriver
+
+driver = GeminiDriver(api_key="...", model="gemini-2.5-flash")
+agent = Agent("analyst", driver=driver)
+
+result = await agent.infer("Summarize this image", images=["./chart.png"])
+```
+
+Injected drivers are used for regular, structured-output, multimodal, and streaming calls.
+
+### Image generation
+
+Generate images through an OpenAI-compatible Images API:
+
+```python
+image = await agent.generate_image(
+    "A paper-cut illustration of a fox in a moonlit forest",
+    model="gpt-image-2",
+    size="1024x1024",
+    quality="high",
+    output_path="renders/fox.png",
+)
+```
+
+Results normalize inline bytes, hosted URLs, revised prompts, and MIME types.
+Saving is non-destructive unless `overwrite=True` is explicitly supplied.
+Use `generate_images(..., n=3)` only when you explicitly need a batch.
+
 ## Sandboxed tool execution
 
 Tools run in isolated subprocesses with timeouts and permission scoping. Separate what the agent can read from what it can write:
