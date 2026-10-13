@@ -1,16 +1,16 @@
 """InferResult[T] - Fully typed, dictionary-compatible response object."""
 
-from typing import Generic, TypeVar, Optional, Any, Dict, List, Iterator
+from typing import Generic, TypeVar, Optional, Any, Dict, List
 
 T = TypeVar("T")
 
 
-class InferResult(Generic[T]):
+class InferResult(dict, Generic[T]):
     """Result from agent inference with typed structured data and backward-compatible dict access."""
 
     def __init__(
         self,
-        text: str,
+        text: str = "",
         structured: Optional[T] = None,
         turns: int = 1,
         history: Optional[List[Dict[str, Any]]] = None,
@@ -18,68 +18,123 @@ class InferResult(Generic[T]):
         success: bool = True,
         error: Optional[str] = None,
         raw: Optional[Dict[str, Any]] = None,
+        **extra: Any,
     ):
-        self.text = text
-        self.structured = structured
-        self.data = structured  # Alias for structured
-        self.turns = turns
-        self.history = history or []
-        self.tool_calls = tool_calls or []
-        self.success = success
-        self.error = error
+        base_dict: Dict[str, Any] = {
+            "text_response": text,
+            "result": extra.pop("result", text),
+            "structured": structured,
+            "turns": turns,
+            "history": history if history is not None else [],
+            "tool_calls": tool_calls if tool_calls is not None else [],
+            "success": success,
+            "error": error,
+        }
+        if raw:
+            base_dict.update(raw)
+        base_dict.update(extra)
+        super().__init__(base_dict)
         self.raw = raw or {}
 
+    @property
+    def text(self) -> str:
+        val = super().get("text_response")
+        if val is not None:
+            return val
+        return str(super().get("result") or "")
+
+    @text.setter
+    def text(self, value: str) -> None:
+        super().__setitem__("text_response", value)
+        super().__setitem__("result", value)
+
+    @property
+    def structured(self) -> Optional[T]:
+        return super().get("structured")
+
+    @structured.setter
+    def structured(self, value: Optional[T]) -> None:
+        super().__setitem__("structured", value)
+
+    @property
+    def data(self) -> Optional[T]:
+        return super().get("structured")
+
+    @data.setter
+    def data(self, value: Optional[T]) -> None:
+        super().__setitem__("structured", value)
+
+    @property
+    def turns(self) -> int:
+        return super().get("turns", 1)
+
+    @turns.setter
+    def turns(self, value: int) -> None:
+        super().__setitem__("turns", value)
+
+    @property
+    def history(self) -> List[Dict[str, Any]]:
+        return super().get("history", [])
+
+    @history.setter
+    def history(self, value: List[Dict[str, Any]]) -> None:
+        super().__setitem__("history", value)
+
+    @property
+    def tool_calls(self) -> List[Dict[str, Any]]:
+        return super().get("tool_calls", [])
+
+    @tool_calls.setter
+    def tool_calls(self, value: List[Dict[str, Any]]) -> None:
+        super().__setitem__("tool_calls", value)
+
+    @property
+    def success(self) -> bool:
+        return super().get("success", True)
+
+    @success.setter
+    def success(self, value: bool) -> None:
+        super().__setitem__("success", value)
+
+    @property
+    def error(self) -> Optional[str]:
+        return super().get("error")
+
+    @error.setter
+    def error(self, value: Optional[str]) -> None:
+        super().__setitem__("error", value)
+
     def __getitem__(self, key: str) -> Any:
-        """Allow dictionary-style access for 100% backward compatibility."""
-        if key in ("text", "text_response"):
+        if key == "text":
             return self.text
-        if key in ("structured", "data"):
+        if key == "data":
             return self.structured
-        if key == "turns":
-            return self.turns
-        if key == "history":
-            return self.history
-        if key == "tool_calls":
-            return self.tool_calls
-        if key == "success":
-            return self.success
-        if key == "error":
-            return self.error
         if key == "raw":
             return self.raw
+        if super().__contains__(key):
+            return super().__getitem__(key)
         if key in self.raw:
             return self.raw[key]
         raise KeyError(key)
 
     def __setitem__(self, key: str, value: Any) -> None:
         if key in ("text", "text_response"):
-            self.text = value
+            super().__setitem__("text_response", value)
         elif key in ("structured", "data"):
-            self.structured = value
-            self.data = value
-        elif key == "turns":
-            self.turns = value
-        elif key == "success":
-            self.success = value
+            super().__setitem__("structured", value)
         else:
-            self.raw[key] = value
+            super().__setitem__(key, value)
 
-    def __contains__(self, key: str) -> bool:
-        if key in ("text", "text_response", "structured", "data", "turns", "history", "tool_calls", "success", "error", "raw"):
+    def __contains__(self, key: object) -> bool:
+        if key in ("text", "data", "raw"):
             return True
-        return key in self.raw
+        return super().__contains__(key) or key in self.raw
 
     def get(self, key: str, default: Any = None) -> Any:
         try:
             return self[key]
         except KeyError:
             return default
-
-    def keys(self) -> List[str]:
-        return ["text_response", "structured", "turns", "history", "tool_calls", "success", "error"]
-
-    def items(self) -> List[tuple]:
-        return [(k, self.get(k)) for k in self.keys()]
 
     def __str__(self) -> str:
         return self.text
@@ -88,3 +143,4 @@ class InferResult(Generic[T]):
         if self.structured is not None:
             return f"InferResult(data={self.structured!r}, turns={self.turns})"
         return f"InferResult(text={self.text!r}, turns={self.turns})"
+

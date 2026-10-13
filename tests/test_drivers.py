@@ -348,3 +348,71 @@ class TestDrivers:
 
         assert result is expected
         assert len(result.images) == 2
+
+    @pytest.mark.asyncio
+    async def test_gemini_driver_passes_api_key_in_header_not_url(self):
+        response = AsyncMock()
+        response.raise_for_status = MagicMock()
+        response.json = AsyncMock(return_value={
+            "candidates": [{"content": {"parts": [{"text": "ok"}]}}]
+        })
+        response.__aenter__ = AsyncMock(return_value=response)
+        response.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.post.return_value = response
+
+        driver = GeminiDriver(api_key="super-secret-key")
+        with patch("agentu.drivers.gemini_driver.aiohttp.ClientSession", return_value=session):
+            await driver.call([{"role": "user", "content": "hi"}])
+
+        called_url = session.post.call_args.args[0]
+        called_headers = session.post.call_args.kwargs["headers"]
+        assert "super-secret-key" not in called_url
+        assert "key=" not in called_url
+        assert called_headers["x-goog-api-key"] == "super-secret-key"
+
+    def test_gemini_and_claude_preserve_explicit_media_metadata(self):
+        from agentu._core.multimodal import build_content_parts
+
+        content = build_content_parts(
+            "Analyze clip",
+            media=[{"type": "video", "url": "https://youtu.be/7Z5Vy9JBANs", "processing": "agentic"}],
+            capabilities={"image": True, "audio": True, "video": True, "document": True},
+        )
+        _, gemini_contents = GeminiDriver()._convert_messages([{"role": "user", "content": content}])
+        video_part = gemini_contents[0]["parts"][1]
+        assert video_part["file_data"]["file_uri"] == "https://youtu.be/7Z5Vy9JBANs"
+        assert video_part["processing"] == "agentic"
+
+    @pytest.mark.asyncio
+    async def test_driver_4xx_error_is_not_retried(self):
+        import aiohttp
+
+        driver = OpenAIDriver(model="gpt-4o")
+        req_info = MagicMock()
+        err_401 = aiohttp.ClientResponseError(
+            request_info=req_info,
+            history=(),
+            status=401,
+            message="Unauthorized",
+        )
+        driver.call = AsyncMock(side_effect=err_401)
+        agent = Agent("driver-agent", driver=driver, enable_memory=False, auto_discover_rules=False)
+
+        with pytest.raises(aiohttp.ClientResponseError) as exc_info:
+            await agent._raw_llm_call("Hello", max_retries=2)
+
+        assert exc_info.value.status == 401
+        assert driver.call.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_driver_session_reuse_and_close(self):
+        driver = OpenAIDriver(model="gpt-4o")
+        s1 = await driver._get_session()
+        s2 = await driver._get_session()
+        assert s1 is s2
+        assert not s1.closed
+        await driver.close()
+        assert s1.closed
+        assert driver._session is None
+

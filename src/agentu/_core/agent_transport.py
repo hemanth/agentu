@@ -88,6 +88,33 @@ class TransportMixin:
             )
         return await driver.generate_image(prompt, model=model, n=n, **kwargs)
 
+    async def _build_messages(
+        self,
+        prompt: str,
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build messages list, offloading media/transcript I/O to a worker thread."""
+        if not images and not media:
+            return [{"role": "user", "content": prompt}]
+
+        driver = getattr(self, "driver", None)
+        capabilities = (
+            driver.capabilities
+            if driver
+            else _openai_compatible_capabilities(self.model)
+        )
+        content = await asyncio.to_thread(
+            build_content_parts,
+            prompt,
+            images=images,
+            media=media,
+            model=self.model,
+            custom_converter=getattr(self, "_media_converter", None),
+            capabilities=capabilities,
+        )
+        return [{"role": "user", "content": content}]
+
     async def _raw_llm_call(
         self,
         prompt: str,
@@ -108,19 +135,7 @@ class TransportMixin:
                 headers["Authorization"] = f"Bearer {self.api_key}"
 
             driver = getattr(self, "driver", None)
-            content = build_content_parts(
-                prompt,
-                images=images,
-                media=media,
-                model=self.model,
-                custom_converter=getattr(self, "_media_converter", None),
-                capabilities=(
-                    driver.capabilities
-                    if driver
-                    else _openai_compatible_capabilities(self.model)
-                ),
-            )
-            messages = [{"role": "user", "content": content}]
+            messages = await self._build_messages(prompt, images=images, media=media)
 
             if driver is not None:
                 driver_schema = output_schema
@@ -136,6 +151,11 @@ class TransportMixin:
                         return response.text
                     except aiohttp.ClientError as exc:
                         last_error = exc
+                        if (
+                            isinstance(exc, aiohttp.ClientResponseError)
+                            and exc.status not in retryable_statuses
+                        ):
+                            raise
                         if attempt == max_retries:
                             raise
                         await asyncio.sleep(2 ** attempt)
@@ -182,6 +202,11 @@ class TransportMixin:
                         return text
                 except aiohttp.ClientError as exc:
                     last_error = exc
+                    if (
+                        isinstance(exc, aiohttp.ClientResponseError)
+                        and exc.status not in retryable_statuses
+                    ):
+                        raise
                     if attempt == max_retries:
                         raise
                     delay = float(2 ** attempt)
@@ -209,20 +234,7 @@ class TransportMixin:
         ):
             try:
                 driver = getattr(self, "driver", None)
-                capabilities = (
-                    driver.capabilities
-                    if driver
-                    else _openai_compatible_capabilities(self.model)
-                )
-                content = build_content_parts(
-                    prompt,
-                    images=images,
-                    media=media,
-                    model=self.model,
-                    custom_converter=getattr(self, "_media_converter", None),
-                    capabilities=capabilities,
-                )
-                messages = [{"role": "user", "content": content}]
+                messages = await self._build_messages(prompt, images=images, media=media)
 
                 if driver is not None:
                     async for chunk in driver.stream(messages):

@@ -62,15 +62,15 @@ class OllamaDriver(BaseDriver):
         if output_schema:
             body["format"] = "json"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
 
         msg = data.get("message", {})
         text = msg.get("content", "")
@@ -101,22 +101,23 @@ class OllamaDriver(BaseDriver):
             },
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.content:
-                    decoded = line.decode("utf-8").strip()
-                    if not decoded:
-                        continue
-                    try:
-                        chunk = json.loads(decoded)
-                        content = chunk.get("message", {}).get("content", "")
-                        if content:
-                            yield content
-                    except json.JSONDecodeError:
-                        continue
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.content:
+                decoded = line.decode("utf-8").strip()
+                if not decoded:
+                    continue
+                try:
+                    chunk = json.loads(decoded)
+                    content = chunk.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+                except json.JSONDecodeError:
+                    continue
+

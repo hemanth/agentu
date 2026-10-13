@@ -15,6 +15,7 @@ from .structured import (
 )
 from ..drivers.base import BaseDriver
 from .agent_transport import TransportMixin
+from .result import InferResult
 
 from .tools import Tool, ToolPermission
 from .safety import check_lethal_trifecta, spotlight_untrusted
@@ -1530,11 +1531,13 @@ User request: {user_input}"""
                 continue
 
             # Success
-            result: Dict[str, Any] = {
-                "result": raw,
-                "structured": validated,
-                "attempts": attempt + 1,
-            }
+            result = InferResult(
+                text=raw,
+                result=raw,
+                structured=validated,
+                turns=attempt + 1,
+                attempts=attempt + 1,
+            )
 
             self.conversation_history.append({
                 "user_input": user_input,
@@ -2041,10 +2044,12 @@ Example response for calculator:
         if output_schema is not None and not self.tools:
             raw = await self._call_llm(user_input, output_schema=output_schema, images=images, media=media)
             validated = parse_and_validate(raw, output_schema)
-            result = {
-                "result": raw,
-                "structured": validated,
-            }
+            result = InferResult(
+                text=raw,
+                result=raw,
+                structured=validated,
+                turns=1,
+            )
             self.conversation_history.append({
                 "user_input": user_input,
                 "response": result,

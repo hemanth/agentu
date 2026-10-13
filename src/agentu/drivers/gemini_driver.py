@@ -33,6 +33,37 @@ class GeminiDriver(BaseDriver):
     def capabilities(self) -> Dict[str, bool]:
         return {"image": True, "audio": True, "video": True, "document": True}
 
+    def _headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["x-goog-api-key"] = self.api_key
+        return headers
+
+    @staticmethod
+    def _build_media_part(payload: Dict[str, Any], parse_data_uri) -> Dict[str, Any]:
+        """Build a Gemini inline_data or file_data part while preserving extra metadata."""
+        url = payload.get("url", "")
+        extra = {k: v for k, v in payload.items() if k not in ("url", "mime_type")}
+        mime_type = payload.get("mime_type")
+
+        if url.startswith("data:"):
+            parsed_mime, b64 = parse_data_uri(url)
+            part: Dict[str, Any] = {
+                "inline_data": {
+                    "mime_type": mime_type or parsed_mime,
+                    "data": b64,
+                }
+            }
+        else:
+            file_data: Dict[str, Any] = {"file_uri": url}
+            if mime_type:
+                file_data["mime_type"] = mime_type
+            part = {"file_data": file_data}
+
+        if extra:
+            part.update(extra)
+        return part
+
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
         """Convert OpenAI-style messages into Gemini contents & system instruction."""
         system_instruction = None
@@ -70,35 +101,12 @@ class GeminiDriver(BaseDriver):
                     parts.append({"text": content})
             elif isinstance(content, list):
                 for part in content:
-                    if part.get("type") == "text":
+                    ptype = part.get("type")
+                    if ptype == "text":
                         parts.append({"text": part.get("text", "")})
-                    elif part.get("type") == "image_url":
-                        url = part.get("image_url", {}).get("url", "")
-                        if url.startswith("data:"):
-                            mime, b64 = url.split(";base64,")
-                            mime_type = mime.replace("data:", "")
-                            parts.append({"inline_data": {"mime_type": mime_type, "data": b64}})
-                        else:
-                            parts.append({"file_data": {"file_uri": url}})
-                    elif part.get("type") == "video_url":
-                        url = part.get("video_url", {}).get("url", "")
-                        parts.append({"file_data": {"file_uri": url}})
-                    elif part.get("type") == "audio_url":
-                        url = part.get("audio_url", {}).get("url", "")
-                        parts.append({"file_data": {"file_uri": url}})
-                    elif part.get("type") == "document":
-                        document = part.get("document", {})
-                        url = document.get("url", "")
-                        if url.startswith("data:"):
-                            mime, b64 = url.split(";base64,", 1)
-                            parts.append({
-                                "inline_data": {
-                                    "mime_type": mime.replace("data:", ""),
-                                    "data": b64,
-                                }
-                            })
-                        else:
-                            parts.append({"file_data": {"file_uri": url}})
+                    elif ptype in ("image_url", "video_url", "audio_url", "document"):
+                        payload = part.get(ptype, {})
+                        parts.append(self._build_media_part(payload, self._parse_data_uri))
 
             for tool_call in msg.get("tool_calls", []):
                 function = tool_call.get("function", {})
@@ -162,7 +170,7 @@ class GeminiDriver(BaseDriver):
         if not model_name.startswith("models/"):
             model_name = f"models/{model_name}"
 
-        url = f"{self.api_base}/{model_name}:generateContent?key={self.api_key or ''}"
+        url = f"{self.api_base}/{model_name}:generateContent"
         sys_inst, contents = self._convert_messages(messages)
 
         body: Dict[str, Any] = {
@@ -179,15 +187,15 @@ class GeminiDriver(BaseDriver):
         if tools:
             body["tools"] = self._convert_tools(tools)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
 
         candidates = data.get("candidates", [{}])
         cand = candidates[0] if candidates else {}
@@ -215,7 +223,7 @@ class GeminiDriver(BaseDriver):
         if not model_name.startswith("models/"):
             model_name = f"models/{model_name}"
 
-        url = f"{self.api_base}/{model_name}:streamGenerateContent?alt=sse&key={self.api_key or ''}"
+        url = f"{self.api_base}/{model_name}:streamGenerateContent?alt=sse"
         sys_inst, contents = self._convert_messages(messages)
 
         body: Dict[str, Any] = {
@@ -229,24 +237,25 @@ class GeminiDriver(BaseDriver):
         if tools:
             body["tools"] = self._convert_tools(tools)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.content:
-                    decoded = line.decode("utf-8").strip()
-                    if not decoded or not decoded.startswith("data: "):
-                        continue
-                    try:
-                        chunk = json.loads(decoded[6:])
-                        for cand in chunk.get("candidates", []):
-                            for p in cand.get("content", {}).get("parts", []):
-                                t = p.get("text")
-                                if t:
-                                    yield t
-                    except json.JSONDecodeError:
-                        continue
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.content:
+                decoded = line.decode("utf-8").strip()
+                if not decoded or not decoded.startswith("data: "):
+                    continue
+                try:
+                    chunk = json.loads(decoded[6:])
+                    for cand in chunk.get("candidates", []):
+                        for p in cand.get("content", {}).get("parts", []):
+                            t = p.get("text")
+                            if t:
+                                yield t
+                except json.JSONDecodeError:
+                    continue
+

@@ -1,9 +1,11 @@
 """Base driver protocol and response structures for LLM adapters."""
 
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Dict, Any, List, Optional, Union
+from typing import AsyncIterator, Dict, Any, List, Optional, Tuple, Union
+import aiohttp
 
 
 @dataclass
@@ -63,6 +65,32 @@ class BaseDriver(ABC):
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Return a reusable aiohttp.ClientSession for connection pooling."""
+        mod = sys.modules.get(self.__class__.__module__)
+        mod_aiohttp = getattr(mod, "aiohttp", aiohttp)
+        session_cls = mod_aiohttp.ClientSession
+        # If ClientSession is patched in tests (not the real aiohttp.ClientSession),
+        # invoke the factory so test mocks work per-test.
+        if session_cls is not aiohttp.ClientSession:
+            return session_cls()
+        if self._session is None or self._session.closed:
+            self._session = session_cls()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the underlying HTTP session if open."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    @staticmethod
+    def _parse_data_uri(url: str) -> Tuple[str, str]:
+        """Parse a data:<mime>;base64,<data> URI into (mime_type, base64_data)."""
+        header, b64 = url.split(";base64,", 1)
+        return header.replace("data:", ""), b64
 
     @property
     def capabilities(self) -> Dict[str, bool]:
@@ -96,3 +124,4 @@ class BaseDriver(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement image generation"
         )
+

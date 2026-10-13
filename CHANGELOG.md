@@ -5,6 +5,17 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-10-12
+
+### Fixed
+
+- **Structured Output & Typed Generics (`InferResult[T]`)**: `Agent.infer(..., output_type=Model)` and `output_schema` now return `InferResult[T]` instances that subclass `dict`, providing `.data` and `.structured` typed attribute access alongside 100% dictionary compatibility (`isinstance(res, dict)`).
+- **Gemini API Key Security**: `GeminiDriver` now passes the API key via the `x-goog-api-key` HTTP header instead of the `?key=` URL query parameter, preventing secret keys from appearing in exception URLs or logs.
+- **Explicit Multimodal Metadata Forwarding**: `GeminiDriver` and `ClaudeDriver` now preserve explicit media dict parameters (such as `{"type": "video", "url": "...", "processing": "agentic"}`) when converting content parts.
+- **Driver Retry Policy**: `TransportMixin._raw_llm_call` no longer retries non-retryable 4xx HTTP errors (`400`, `401`, `403`, `404`) from provider drivers.
+- **Non-Blocking Multimodal I/O**: `TransportMixin` offloads `build_content_parts` (local file reads, `markitdown`, and `youtube-transcript-api` calls) to `asyncio.to_thread` when `images` or `media` are provided.
+- **Persistent Driver HTTP Sessions**: `BaseDriver` now pools and reuses a persistent `aiohttp.ClientSession` across turns with explicit `await driver.close()` lifecycle support.
+
 ## [2.9.0] - 2026-09-15
 
 ### Added

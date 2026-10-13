@@ -78,40 +78,30 @@ class ClaudeDriver(BaseDriver):
             elif isinstance(content, list):
                 parts = []
                 for part in content:
-                    if part.get("type") == "text":
+                    ptype = part.get("type")
+                    if ptype == "text":
                         parts.append({"type": "text", "text": part.get("text", "")})
-                    elif part.get("type") == "image_url":
-                        url = part.get("image_url", {}).get("url", "")
+                    elif ptype in ("image_url", "document"):
+                        block_type = "image" if ptype == "image_url" else "document"
+                        payload = part.get(ptype, {})
+                        url = payload.get("url", "")
+                        extra = {k: v for k, v in payload.items() if k not in ("url", "mime_type")}
                         if url.startswith("data:"):
-                            mime, b64 = url.split(";base64,")
-                            mime_type = mime.replace("data:", "")
-                            parts.append({
-                                "type": "image",
+                            mime_type, b64 = self._parse_data_uri(url)
+                            block: Dict[str, Any] = {
+                                "type": block_type,
                                 "source": {"type": "base64", "media_type": mime_type, "data": b64},
-                            })
+                            }
                         elif url:
-                            parts.append({
-                                "type": "image",
+                            block = {
+                                "type": block_type,
                                 "source": {"type": "url", "url": url},
-                            })
-                    elif part.get("type") == "document":
-                        document = part.get("document", {})
-                        url = document.get("url", "")
-                        if url.startswith("data:"):
-                            mime, b64 = url.split(";base64,", 1)
-                            parts.append({
-                                "type": "document",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": mime.replace("data:", ""),
-                                    "data": b64,
-                                },
-                            })
-                        elif url:
-                            parts.append({
-                                "type": "document",
-                                "source": {"type": "url", "url": url},
-                            })
+                            }
+                        else:
+                            continue
+                        if extra:
+                            block.update(extra)
+                        parts.append(block)
                 claude_msgs.append({"role": claude_role, "content": parts})
 
         return system_text, claude_msgs
@@ -187,15 +177,15 @@ class ClaudeDriver(BaseDriver):
         if tools:
             body["tools"] = self._convert_tools(tools)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
 
         text_parts = []
         for c in data.get("content", []):
@@ -235,26 +225,27 @@ class ClaudeDriver(BaseDriver):
         if tools:
             body["tools"] = self._convert_tools(tools)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.content:
-                    decoded = line.decode("utf-8").strip()
-                    if not decoded or not decoded.startswith("data: "):
-                        continue
-                    try:
-                        chunk = json.loads(decoded[6:])
-                        t = chunk.get("type")
-                        if t == "content_block_delta":
-                            delta = chunk.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                text = delta.get("text")
-                                if text:
-                                    yield text
-                    except json.JSONDecodeError:
-                        continue
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.content:
+                decoded = line.decode("utf-8").strip()
+                if not decoded or not decoded.startswith("data: "):
+                    continue
+                try:
+                    chunk = json.loads(decoded[6:])
+                    t = chunk.get("type")
+                    if t == "content_block_delta":
+                        delta = chunk.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text = delta.get("text")
+                            if text:
+                                yield text
+                except json.JSONDecodeError:
+                    continue
+

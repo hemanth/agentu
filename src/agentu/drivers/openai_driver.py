@@ -71,15 +71,15 @@ class OpenAIDriver(BaseDriver):
                 },
             }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
 
         choices = data.get("choices", [{}])
         choice = choices[0] if choices else {}
@@ -125,15 +125,15 @@ class OpenAIDriver(BaseDriver):
             if value is not None:
                 body[key] = value
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.api_base}/images/generations",
-                json=body,
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                payload = await resp.json()
+        session = await self._get_session()
+        async with session.post(
+            f"{self.api_base}/images/generations",
+            json=body,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            payload = await resp.json()
 
         image_format = output_format or "png"
         mime_type = "image/jpeg" if image_format in ("jpg", "jpeg") else f"image/{image_format}"
@@ -167,26 +167,27 @@ class OpenAIDriver(BaseDriver):
             body["tools"] = tools
             body["tool_choice"] = "auto"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=body,
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.content:
-                    decoded = line.decode("utf-8").strip()
-                    if not decoded or not decoded.startswith("data: "):
-                        continue
-                    payload = decoded[6:]
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(payload)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content")
-                        if content:
-                            yield content
-                    except json.JSONDecodeError:
-                        continue
+        session = await self._get_session()
+        async with session.post(
+            url,
+            json=body,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.content:
+                decoded = line.decode("utf-8").strip()
+                if not decoded or not decoded.startswith("data: "):
+                    continue
+                payload = decoded[6:]
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content")
+                    if content:
+                        yield content
+                except json.JSONDecodeError:
+                    continue
+
