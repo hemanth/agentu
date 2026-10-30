@@ -1,6 +1,6 @@
 # agentu
 
-A harness-engineered AI agent runtime. Build agents with tool isolation, self-correction, and permission scoping out of the box.
+Run AI agents in Python with subprocess tool isolation, self-correction, and zero-SDK provider routing.
 
 ```bash
 pip install agentu
@@ -9,1044 +9,195 @@ pip install agentu
 ## Quick start
 
 ```python
-from agentu import Agent
+from agentu import Agent, tool
 
-def search_products(query: str) -> list:
-    return db.products.search(query)
+@tool(readonly=True)
+def search_products(query: str, max_price: int = 1500) -> list[dict]:
+    """Search catalog for matching products."""
+    return [
+        {"name": "ThinkPad X1 Carbon", "price": 1399},
+        {"name": "MacBook Air M4", "price": 1199},
+    ]
 
-agent = Agent("sales").with_tools([search_products])
+agent = Agent("sales", model="gemini-2.5-flash").with_tools([search_products])
 
-# Call a tool directly
-result = await agent.call("search_products", {"query": "laptop"})
+# Synchronous script one-liner
+res = agent.run("Find me laptops under $1500")
+print(res.text)
 
-# Or let the LLM figure it out
-result = await agent.infer("Find me laptops under $1500")
+# Or async inside your app:
+# res = await agent.infer("Find me laptops under $1500")
+# raw = await agent.call("search_products", {"query": "laptop"})
 ```
 
-`call()` runs a tool. `infer()` runs a multi-turn agentic loop — the LLM picks tools, calls them, sees results, and keeps going until the task is done or `max_turns` is hit.
+`run()` executes synchronously. `infer()` runs the async multi-turn agent loop and returns an `InferResult`. `call()` invokes a tool directly.
 
-### Native provider drivers
-
-Inject a driver when the provider does not expose an OpenAI-compatible endpoint:
+## Zero-config providers
 
 ```python
-from agentu import Agent, GeminiDriver
-
-driver = GeminiDriver(api_key="...", model="gemini-2.5-flash")
-agent = Agent("analyst", driver=driver)
-
-result = await agent.infer("Summarize this image", images=["./chart.png"])
+# Picks up GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY
+gemini = Agent("analyst", model="gemini-2.5-flash")
+claude = Agent("reviewer", model="claude-sonnet-4-20250514")
+openai = Agent("coder", model="openai/gpt-4o")
+groq   = Agent("fast", model="groq/llama-3.3-70b-versatile")
+local  = Agent("offline", model="ollama/qwen3:latest")
 ```
 
-Injected drivers are used for regular, structured-output, multimodal, and streaming calls.
-
-### Image generation
-
-Generate images through an OpenAI-compatible Images API:
-
-```python
-image = await agent.generate_image(
-    "A paper-cut illustration of a fox in a moonlit forest",
-    model="gpt-image-2",
-    size="1024x1024",
-    quality="high",
-    output_path="renders/fox.png",
-)
-```
-
-Results normalize inline bytes, hosted URLs, revised prompts, and MIME types.
-Saving is non-destructive unless `overwrite=True` is explicitly supplied.
-Use `generate_images(..., n=3)` only when you explicitly need a batch.
+All four protocol drivers (`GeminiDriver`, `ClaudeDriver`, `OpenAIDriver`, `OllamaDriver`) speak native REST/SSE over pooled `aiohttp` sessions — zero vendor SDK bloat.
 
 ## Sandboxed tool execution
 
-Tools run in isolated subprocesses with timeouts and permission scoping. Separate what the agent can read from what it can write:
-
 ```python
-agent = Agent("assistant").with_sandbox(
-    read_tools=[search, get_weather],
-    write_tools=[save_file, send_email],
+agent = Agent("ops", model="gpt-4o").with_sandbox(
+    read_tools=[search_products, read_logs],
+    write_tools=[save_report, send_email],
     timeout=10,
-    max_memory_mb=256,     # enforce memory limit per subprocess
-    allow_network=False,   # block outbound network by default
+    max_memory_mb=256,
+    allow_network=False,
 )
-
-result = await agent.infer("Find the weather and save it to a file")
 ```
 
-- `read_tools` get READONLY permission, no side effects
-- `write_tools` get WRITE permission, side effects allowed
-- Every tool runs in a subprocess, not in your agent's process
-- If a tool hangs past `timeout`, subprocess is killed, agent stays alive
-- `max_memory_mb` enforces memory limits via `resource.setrlimit`
-- `allow_network=False` blocks outbound HTTP via proxy env vars
-- Sandbox exit codes, stderr, and timeouts are captured in the observer
+- `read_tools` run as `READONLY`; `write_tools` run as `WRITE`; `DANGEROUS` tools stay blocked unless enabled via `.with_permissions(allow_dangerous=True)`
+- Every sandboxed tool runs in an isolated subprocess — hung tools are killed at `timeout` without crashing your process
+- Defer large tool catalogs with `.with_tools([core_tool], defer=[...100_extra_tools])` so the agent discovers them on demand via `search_tools`
 
 ## Code Mode
 
-Instead of making individual JSON tool calls, the LLM writes Python code that calls your tools directly. Inspired by [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/) — LLMs are better at writing code than making tool calls because they've seen millions of lines of real code, but only synthetic tool-call training data.
-
 ```python
-# Code Mode: LLM writes Python that chains the calls
-agent = Agent("bot", codemode=True).with_tools([search, get_weather, save_file])
-await agent.infer("Search for weather in SF and save it")
-# LLM writes:
-#   results = tools.search("weather SF")
-#   weather = tools.get_weather(location="SF")
-#   tools.save_file("weather.txt", weather)
-# ONE round trip, ONE code execution
+agent = Agent("bot", model="claude-sonnet-4-20250514", codemode=True).with_tools([
+    search_products, check_inventory, save_report
+])
+res = await agent.infer("Find in-stock laptops and save a summary")
 ```
 
-How it works:
-1. Your tools are converted to typed Python stubs and placed in the system prompt
-2. The LLM writes Python code using `tools.search(query="...")` syntax
-3. Safe stdlib imports allowed (math, json, re) — dangerous ones blocked (os, sys)
-4. Auto-retry: if code fails, error feeds back to LLM for self-correction
+Instead of N sequential JSON tool round-trips, the LLM writes typed Python against `tools.*` in a restricted sandbox (`math`, `json`, `re` allowed; `os`, `sys`, `subprocess`, `socket` blocked) and self-corrects on runtime errors.
 
-## Guardrails with self-correction
-
-When output guardrails fail, the agent retries automatically by feeding the violation back to the LLM:
+## Structured outputs + tools
 
 ```python
-agent = Agent("assistant").with_guardrails(
-    output_guardrails=[PII(), ContentFilter()],
-    max_corrections=2,
-)
-
-result = await agent.infer("Summarize the customer data")
-# If the PII guardrail or ContentFilter trips, it retries up to 2 times with the violation as feedback
-```
-
-## Hooks
-
-Intercept tool calls before and after execution:
-
-```python
-from agentu import HookResult, HookAction
-
-async def audit_hook(tool_name, params, context):
-    if tool_name == "delete_all":
-        return HookResult(action=HookAction.DENY, reason="Deletes are not allowed")
-    return HookResult(action=HookAction.ALLOW)
-
-agent = Agent("assistant").with_hooks(
-    pre_tool=audit_hook,
-    post_tool=lambda name, params, result: result.upper(),
-    on_stop=lambda response: response,
-)
-```
-
-`pre_tool` returns ALLOW, DENY, or MODIFY. Denials are fed back to the model as context. Multiple hooks chain additively.
-
-## Structured outputs & Typed Generics
-
-Return validated Pydantic models with full type safety and IDE autocomplete:
-
-```python
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from agentu import Agent, InferResult
 
-class Review(BaseModel):
-    rating: int
-    summary: str
+class DealSummary(BaseModel):
+    top_pick: str
+    price: int = Field(le=1500)
+    rationale: str
 
-# Typed inference — result.data is fully typed as Review!
-result: InferResult[Review] = await agent.infer("Review this product", output_type=Review)
-
-print(result.data.rating)    # Typed attribute access (IDE autocompleted)
-print(result.data.summary)
-
-# 100% backward compatible dictionary access:
-review = result["structured"]
+res: InferResult[DealSummary] = await agent.infer(
+    "Pick the best laptop deal",
+    output_type=DealSummary,
+)
+print(res.data.top_pick, res.data.price)
 ```
 
-On validation failure, the error is fed back to the LLM for retry (controlled by `max_corrections` from guardrails).
+Works standalone or combined with tools — `agentu` executes any needed tools first, validates the final output against your Pydantic model, and retries automatically with field-level error feedback if validation fails.
 
-## Multimodal
-
-Pass mixed media (images, video links, audio files, documents) directly to `media=[...]`:
+## Guardrails & hooks
 
 ```python
-# Unified media engine — auto-detects extensions, domains, and magic bytes
-result = await agent.infer(
-    "Analyze the keynote clip, slide chart, and podcast snippet:",
+from agentu import Agent, PII, ContentFilter, HookAction, HookResult
+
+async def block_prod_deletes(tool_name, params, ctx):
+    if tool_name == "drop_table":
+        return HookResult(action=HookAction.DENY, reason="Production drops blocked")
+    return HookResult(action=HookAction.ALLOW)
+
+agent = (
+    Agent("support", model="gpt-4o")
+    .with_guardrails(output_guardrails=[PII(), ContentFilter()], max_corrections=2)
+    .with_hooks(pre_tool=block_prod_deletes)
+)
+```
+
+Guardrail violations feed back into the model for automatic self-correction up to `max_corrections` attempts. Hooks intercept `pre_tool`, `post_tool`, and `on_stop` with `ALLOW`, `DENY`, or `MODIFY`.
+
+## Multimodal & image generation
+
+```python
+res = await agent.infer(
+    "Cross-check the keynote demo against the architecture PDF:",
     media=[
-        "https://youtu.be/7Z5Vy9JBANs",   # auto-detected as video
-        "./chart.png",                    # auto-detected as image (base64 encoded)
-        "./audio_memo.mp3",               # auto-detected as audio
-        "./whitepaper.pdf",               # auto-detected as document
+        {"type": "video", "url": "https://youtu.be/7Z5Vy9JBANs", "processing": "agentic"},
+        "./latency_chart.png",
+        "./whitepaper.pdf",
     ],
 )
 
-# Or pass explicit dicts for fine-grained provider options:
-result = await agent.infer(
-    "Analyze video with agentic processing:",
-    media=[
-        {"type": "video", "url": "https://youtu.be/7Z5Vy9JBANs", "processing": "agentic"}
-    ],
+image = await agent.generate_image(
+    "Minimalist isometric server rack on warm paper",
+    model="gpt-image-2",
+    output_path="renders/rack.png",
 )
 ```
 
-### Capability-Aware Markdown Degradation
+When targeting text-only models (e.g. `deepseek-chat` or local Ollama), install `pip install "agentu[media]"` and `agentu` automatically degrades videos and documents into Markdown transcripts.
 
-When calling models that don't support native video/audio (Claude, DeepSeek, Llama, Ollama text models), `agentu` automatically transcodes media attachments to Markdown transcripts/text using `markitdown` or `youtube-transcript-api`:
-
-```python
-# Video URLs sent to a text model automatically get converted into a Markdown transcript!
-agent = Agent("bot", model="deepseek-r1")
-await agent.infer("What are the key points in this keynote?", media=["https://youtu.be/7Z5Vy9JBANs"])
-
-# Custom converter functions can also be attached:
-agent.with_media_converter(my_custom_transcriber)
-```
-
-Install the optional media package:
-```bash
-pip install "agentu[media]"
-```
-
-`images=[...]` remains 100% backward compatible for vision-only calls.
-
-## Context management
-
-Prevent context overflow in long-running agents:
+## Skills, rules & MCP
 
 ```python
-agent = Agent("assistant").with_context(
-    max_tokens=100_000,
-    compaction="auto",    # truncate → summarize → keep recent
-    keep_recent=5,
+agent = await (
+    Agent("engineer", model="claude-sonnet-4-20250514", auto_discover_rules=True)
+    .with_skills(["./skills/security-audit", "github:hemanth/skills/python-perf"])
+    .with_mcp(["http://localhost:3000", {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]}])
 )
 ```
 
-Compaction triggers at 80% budget. Tiered strategy: truncate old tool results → LLM-summarize → drop oldest turns.
+Auto-discovers `AGENTS.md` / `CLAUDE.md` from your repo root, loads `SKILL.md` progressive instructions only when relevant, and connects to HTTP, Streamable HTTP, or STDIO MCP servers.
 
-## Rule files
-
-Prepend project-level rules to every LLM call:
-
-```python
-agent = Agent("assistant").with_rules("AGENTS.md")
-```
-
-Or let the agent auto-discover `AGENTS.md` / `CLAUDE.md` from your repo root:
-
-```python
-agent = Agent("assistant", auto_discover_rules=True)
-```
-
-Checks `AGENTS.md` → `.agents/AGENTS.md` → `CLAUDE.md` → `.claude/CLAUDE.md`. First match wins.
-
-Works with declarative config too:
-
-```yaml
-name: "support-agent"
-model: "openai/gpt-4o"
-rules: "AGENTS.md"
-```
-
-## Tool permissions
-
-Three permission levels control what tools can do:
-
-```python
-from agentu import Agent, Tool, ToolPermission
-
-agent = Agent("bot").with_tools([
-    Tool(search, permission=ToolPermission.READONLY),     # always allowed
-    Tool(save_file, permission=ToolPermission.WRITE),     # allowed, logged
-    Tool(delete_all, permission=ToolPermission.DANGEROUS), # blocked by default
-])
-
-# Explicitly allow DANGEROUS tools
-agent.with_permissions(allow_dangerous=True)
-
-# Permission modes
-agent.with_permissions(mode="plan")         # blocks all WRITE tools
-agent.with_permissions(mode="ask-writes")   # WRITE tools raise for approval
-```
-
-## Declarative configuration
-
-Deploy agents from YAML or JSON with zero code:
-
-**1. Create a `bot.yaml` (or `.json`)**
-```yaml
-name: "support-agent"
-model: "openai/gpt-4o"
-system_prompt: "You are an expert IT agent."
-rules: "AGENTS.md"
-notify:
-  - "discord://webhook/id"
-cache:
-  preset: "distributed"
-```
-
-**2. Load dynamically**
-```python
-from agentu import Agent
-import asyncio
-
-async def main():
-    agent = await Agent.from_config("bot.yaml")
-    
-    # Append local Python rules/tools if desired, then infer!
-    agent.with_tools([resolve_ticket])
-    await agent.infer("Help me reset my router")
-
-asyncio.run(main())
-```
-
-*(Requires `pip install agentu[yaml]` to load `.yaml` files. JSON loads natively without extra dependencies).*
-
-## Workflows
-
-Chain agents with `>>` (sequential) and `&` (parallel):
-
-```python
-# One after another
-workflow = researcher("Find AI trends") >> analyst("Analyze") >> writer("Summarize")
-
-# All at once
-workflow = search("AI") & search("ML") & search("Crypto")
-
-# Parallel first, then merge
-workflow = (search("AI") & search("ML")) >> analyst("Compare findings")
-
-result = await workflow.run()
-```
-
-You can also pass data between steps with lambdas:
-
-```python
-workflow = (
-    researcher("Find companies")
-    >> analyst(lambda prev: f"Extract top 5 from: {prev['result']}")
-    >> writer(lambda prev: f"Write report about: {prev['companies']}")
-)
-```
-
-Interrupted workflows can resume from the last successful step:
-
-```python
-from agentu import resume_workflow
-
-result = await workflow.run(checkpoint="./checkpoints", workflow_id="my-report")
-
-# After a crash, pick up where you left off
-await resume_workflow(result["checkpoint_path"])
-```
-
-### Agents as tools
-
-Give an orchestrator access to specialist agents. The LLM decides the workflow dynamically — no graph framework needed:
-
-```python
-researcher = Agent("researcher").with_tools([search])
-analyst = Agent("analyst").with_tools([analyze])
-writer = Agent("writer").with_tools([summarize])
-
-# The LLM routes between agents based on the goal
-orchestrator = Agent("planner").with_agents([researcher, analyst, writer])
-result = await orchestrator.infer("Research AI coding tools, analyze trends, write a report")
-```
-
-Each child agent becomes a callable tool (`call_researcher`, `call_analyst`, `call_writer`). The orchestrator's LLM decides when to call which agent, enabling sequential, parallel, conditional, and looping workflows through its own reasoning.
-
-### Agent Plugins (v1.0.0 Specification)
-
-Load portable plugins adhering to the [Agent Plugins 1.0.0 specification](https://agent-plugins.org/specification) (backed by Google, Amazon, Microsoft, Cursor, OpenAI, Vercel). `agentu` automatically discovers and loads `plugin.json`, skills from `skills/*/SKILL.md`, and MCP servers from `mcp.json`:
-
-```python
-# Load a single plugin package directory
-agent = await Agent("assistant").with_plugins("./plugins/bigquery-reports")
-
-# Or load multiple plugins at once
-agent = await Agent("assistant").with_plugins([
-    "./plugins/reports-plugin",
-    "./plugins/data-agent-kit"
-])
-```
-
-## Caching
-
-Cache LLM responses to skip redundant API calls. Works with both plain strings and full conversations.
-
-```python
-# Basic: memory + SQLite, 1-hour TTL
-agent = Agent("assistant").with_cache()
-
-# Same prompt, same response — no API call
-await agent.infer("What is Python?")  # hits the LLM
-await agent.infer("What is Python?")  # instant, from cache
-```
-
-### Presets
-
-```python
-# Exact match only (memory + SQLite)
-agent.with_cache(preset="basic")
-
-# Semantic matching — "vegan food" hits cache for "plant-based meals"
-agent.with_cache(preset="smart", similarity_threshold=0.9)
-
-# Offline-friendly with filesystem backup and background sync
-agent.with_cache(preset="offline")
-
-# Redis-backed for distributed setups
-agent.with_cache(preset="distributed", redis_url="redis://localhost:6379")
-```
-
-### Conversation caching
-
-Full conversation lists cache the same way strings do -- deterministic serialization, same hash, same hit:
-
-```python
-conversation = [
-    {"role": "user", "content": "Hello!"},
-    {"role": "assistant", "content": "Hi there!"},
-    {"role": "user", "content": "What's the weather?"},
-]
-cache.set(conversation, "my-bot", "Looks sunny today.")
-cache.get(conversation, "my-bot")  # → "Looks sunny today."
-```
-
-The second parameter is a `namespace` -- any string that scopes the cache. Usually the model name, but it can be anything.
-
-### How matching works
-
-| Strategy | How | When |
-|---|---|---|
-| Exact | SHA-256 hash of prompt + namespace + temperature | Default, always runs first |
-| Semantic | Cosine similarity of embedding vectors | `preset="smart"` or higher, runs on exact miss |
-
-Semantic matching uses an embedding model (local `all-MiniLM-L6-v2` or API-based `nomic-embed-text`) and only returns a hit when similarity exceeds the threshold (default 0.95).
-
-## Memory
-
-```python
-agent.remember("Customer prefers email", importance=0.9)
-memories = agent.recall(query="communication preferences")
-
-# Semantic recall — find by meaning, not just keywords
-memories = agent.recall(query="how to reach the customer", semantic=True)
-```
-
-SQLite-backed, searchable, persistent across sessions. When `semantic=True`, uses embedding similarity instead of substring matching.
-
-### Structured extraction
-
-The LLM auto-extracts entities, topics, summary, and importance on every `remember()` call. Just pass raw text:
-
-```python
-agent.remember("Anthropic reports 62% of Claude usage is code-related")
-# LLM extracts → entities: ["Anthropic", "Claude"], topics: ["AI", "code"], importance: 0.8
-
-# Conversation turns skip extraction automatically (no point tagging chat)
-agent.remember("user said hello", memory_type="conversation")
-
-# Manual override — skips the LLM call
-agent.remember("data", entities=["X"], topics=["Y"])
-
-# Opt out globally
-agent = Agent("bot", auto_extract_memory=False)
-```
-
-### Background consolidation
-
-Like the brain during sleep — reviews memories on a timer, finds patterns, stores insights:
-
-```python
-agent.with_consolidation(every=30)  # every 30 minutes
-```
-
-The consolidation agent reads unconsolidated memories, discovers cross-cutting themes, and stores synthesized insights as high-importance memories.
-
-### Inbox file watcher
-
-Drop a file → agent processes it → stored as memory:
-
-```python
-agent.with_inbox("./inbox")
-# Or via workspace: inbox: { watch: ./inbox } in agent.yaml
-```
-
-Files are processed via `agent.infer()` and moved to `.processed/`.
-
-### Rationale Recording (ADRs)
-
-Agents can explicitly record architectural decisions and the reasoning behind their actions, creating an automated audit trail.
-
-```python
-agent = Agent("architect", enable_memory=True, enable_rationale_recording=True)
-
-# The agent will automatically evaluate trade-offs and use the `record_rationale` tool
-await agent.infer("Should we use threading or asyncio? Record your reasoning.")
-
-# Retrieve the decision later
-memories = agent.recall(query="asyncio")
-```
-
-Rationale events are simultaneously saved to memory (with `memory_type="rationale"`) and emitted to the observability pipeline.
-## Skills
-
-Load domain expertise on demand, either from local paths or GitHub:
-
-```python
-from agentu import Agent, Skill
-
-# From GitHub (cached locally at ~/.agentu/skills/)
-agent = Agent("assistant").with_skills([
-    "hemanth/agentu-skills/pdf-processor",
-    "openai/skills/code-review@v1.0",
-])
-
-# From local
-agent = Agent("assistant").with_skills(["./skills/my-skill"])
-
-# Or define inline
-pdf_skill = Skill(
-    name="pdf-processing",
-    description="Extract text and tables from PDF files",
-    instructions="skills/pdf/SKILL.md",
-    resources={"forms": "skills/pdf/FORMS.md"}
-)
-agent = Agent("assistant").with_skills([pdf_skill])
-```
-
-Skills load progressively: metadata first (100 chars), then instructions (1500 chars), then resources only when needed.
-
-## Sessions
-
-Stateful conversations with automatic context:
-
-```python
-from agentu import SessionManager
-
-manager = SessionManager()
-session = manager.create_session(agent)
-
-await session.send("What's the weather in SF?")
-await session.send("What about tomorrow?")  # knows you mean SF
-
-# Checkpoint and resume
-session.checkpoint()                    # save to SQLite
-session = manager.resume("sid", agent)  # restore later
-session.checkpoint(fork=True)           # branch into a new session
-```
-
-Multi-user isolation, SQLite persistence, session timeout handling, checkpoint/resume.
-
-## Evaluation
-
-Test your agents with simple assertions:
-
-```python
-from agentu import evaluate
-
-test_cases = [
-    {"ask": "What's 5 + 3?", "expect": 8},
-    {"ask": "Weather in SF?", "expect": "sunny"}
-]
-
-results = await evaluate(agent, test_cases)
-print(f"Accuracy: {results.accuracy}%")
-print(results.to_json())  # export for CI/CD
-```
-
-Matching strategies: exact, substring, LLM-as-judge, or custom validators.
-
-### Trajectory evals
-
-```python
-from agentu.eval.trajectory import TrajectoryAssertion
-
-assertion = TrajectoryAssertion(
-    expected_tools=["search", "save_file"],
-    max_tool_calls=5,
-    no_redundant_calls=True,
-)
-
-# Convert an observed trace into an eval case
-eval_case = agent.observer.to_eval_case()
-```
-
-## Observability
-
-All LLM calls, tool executions, self-corrections, and sandbox events are tracked automatically:
-
-```python
-from agentu import Agent, observe
-
-observe.configure(output="console")  # or "json" or "silent"
-
-agent = Agent("assistant").with_sandbox(
-    read_tools=[search],
-    write_tools=[save],
-    timeout=10,
-)
-await agent.infer("Find me laptops")
-
-metrics = agent.observer.get_metrics()
-# {"tool_calls": 3, "total_duration_ms": 1240, "errors": 0}
-```
-
-Events captured: `tool_call`, `tool_blocked`, `self_correction`, `llm_request`, `inference_start`, `inference_end`, `context_compaction`, `error`, `session_create`, `session_end`.
-
-### OpenTelemetry
-
-```bash
-pip install agentu[otel]
-```
-
-```python
-agent = Agent("assistant").with_otel(service_name="my-app")
-```
-
-Maps to GenAI semantic conventions: `gen_ai.client.operation`, `gen_ai.execute_tool`, `gen_ai.chat`.
-
-### Dashboard
-
-```python
-from agentu import serve
-
-serve(agent, port=8000)
-# http://localhost:8000/dashboard — live metrics
-# http://localhost:8000/docs — auto-generated API docs
-```
-
-## Notifications
-
-Send low-latency, non-blocking alerts to Slack, Discord, Email, or SMS when an agent finishes its task.
-
-```bash
-pip install agentu[notify]
-```
-
-```python
-from agentu import Agent
-
-# Attach notification middleware via the builder pattern
-agent = Agent("my-bot").with_notifier([
-    "slack://bot-token/channel-id",
-    "discord://webhook_id/webhook_token"
-])
-
-# The agent executes without blocking, and posts a rich summary containing tokens and elapsed ms.
-await agent.infer("Audit the database schema")
-```
-
-### Custom Formatting & Failure Alerts
-Notifications trigger natively on Agent crashes too (e.g. rate limits). If you want to format exactly how the alert looks for successes or failures, provide a custom formatter:
-
-```python
-from agentu.middleware import NotifyMiddleware
-
-def custom_format(context, response, error) -> str:
-    if error:
-        return f"🚨 AGENT CRASH 🚨\n{error}"
-    return f"✅ Agent {context.namespace} finished in {context.elapsed_ms}ms"
-
-# Fall back to base use() method to pass the custom formatter
-agent.use(NotifyMiddleware(
-    targets=["slack://bot-token/channel-id"], 
-    formatter=custom_format
-))
-```
-
-## Ralph mode
-
-Run agents in autonomous loops with progress tracking:
-
-```python
-result = await agent.ralph(
-    prompt_file="PROMPT.md",
-    max_iterations=50,
-    timeout_minutes=30,
-    on_iteration=lambda i, data: print(f"[{i}] {data['result'][:50]}...")
-)
-```
-
-The agent loops until all checkpoints in `PROMPT.md` are complete or limits are reached.
-
-## Loop Engineering
-
-Design the system that prompts your agents. Three primitives for building autonomous loops:
-
-### Scheduled Automations
-
-Run agents on a cadence with findings persisted to SQLite:
-
-```python
-# Every 30 minutes
-agent = Agent("triage").with_schedule(every=30, prompt="Review open issues")
-
-# Cron expression (daily at 9am)
-agent = Agent("ops").with_schedule(cron="0 9 * * *", prompt_file="TRIAGE.md")
-
-# Start the scheduler
-await agent.start()
-
-# Check findings
-findings = agent.findings()  # pending findings
-agent.stop()                 # graceful shutdown
-```
-
-### Sub-agents (maker-checker)
-
-Split the maker from the checker. Define roles inline or from `.agents/` directory:
-
-```python
-agent = Agent("lead").with_subagents([
-    {"name": "coder", "instructions": "Write clean code.", "role": "maker"},
-    {"name": "reviewer", "instructions": "Review for bugs.", "role": "checker"},
-])
-
-# Or load from .agents/ directory
-agent = Agent("lead").with_subagents(".agents/")
-
-result = await agent.delegate("Refactor the auth module")
-# {"result": "...", "review": "APPROVED: ...", "approved": True, "corrections": 0}
-
-# Judge panels — multiple reviewers vote
-result = await agent.delegate("Refactor auth", judges=3)
-# Approved only when majority agrees
-
-# Best-of-N — race N agents, judge picks the winner
-result = await agent.best_of(3, "Write a haiku about code")
-```
-
-Sub-agents inherit the parent's model, tools, and API config unless overridden.
-
-### Worktree Isolation
-
-Isolate parallel agents with git worktrees:
-
-```python
-agent = Agent("builder").with_worktree()
-result = await agent.infer("Refactor auth module")
-# Runs in an isolated git worktree, auto-cleaned after
-```
-
-Combine all three for a full loop:
+## Memory, context & caching
 
 ```python
 agent = (
-    Agent("ops")
-    .with_tools([scan_ci, check_issues])
-    .with_subagents(".agents/")
-    .with_worktree()
-    .with_schedule(every=60, prompt="Triage CI failures")
+    Agent("researcher", model="gemini-2.5-flash", cache=True)
+    .with_context(max_tokens=100_000, compaction="auto", keep_recent=5)
 )
-await agent.start()
+agent.remember("Customer prefers EU regions and PostgreSQL 17", importance=0.9)
 ```
 
-## Tool search
+Short-term working memory + SQLite long-term recall come built in. Context compaction triggers at 80% token budget (truncate old tool outputs → summarize → keep recent turns).
 
-When you have hundreds of tools, you don't want them all in context. Deferred tools are discovered on-demand:
+## Workflows, sub-agents & Ralph
 
 ```python
-agent = Agent("payments").with_tools(defer=[charge_card, send_receipt, refund_payment])
+from agentu import Agent, ralph, run_maker_checker
 
-# Agent calls search_tools("charge card") → finds charge_card → executes it
-result = await agent.infer("charge $50 to card_123")
+pipeline = (researcher("Gather benchmarks") & analyst("Check pricing")) >> writer("Draft memo")
+out = await pipeline.run()
+
+reviewed = await run_maker_checker(maker=coder, checker=reviewer, task="Write rate limiter", max_rounds=3)
+loop_stats = await ralph(coder.with_worktree(), "PROMPT.md", max_iterations=25, timeout_minutes=20)
 ```
 
-A `search_tools` function is auto-added. The agent searches, activates, and calls -- all internally.
+Compose steps with `>>` (sequential) and `&` (parallel), delegate across agents with `.with_agents([...])`, isolate git edits with `.with_worktree()`, or run autonomous `ralph` loops with checkpoint recovery.
 
-## MCP
-
-Connect to Model Context Protocol servers:
-
-```python
-# HTTP
-agent = await Agent("bot").with_mcp(["http://localhost:3000"])
-
-# STDIO — spawn a local MCP server as a subprocess
-agent = await Agent("bot").with_mcp([
-    {"type": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}
-])
-
-# Streamable HTTP (v2 stateless core)
-agent = await Agent("bot").with_mcp([
-    {"type": "streamable-http", "url": "https://api.com/mcp", "headers": {"Auth": "Bearer xyz"}}
-])
-```
-
-Supports HTTP, SSE, STDIO, and Streamable HTTP transports. Elicitation, OAuth 2.1, and long-running tasks via the extensions module.
-
-## LLM support
-
-Works with any OpenAI-compatible API. Auto-detects available models from Ollama:
-
-```python
-Agent("assistant")                                        # first available Ollama model
-Agent("assistant", model="qwen3")                         # specific model
-Agent("assistant", model="gpt-4", api_key="sk-...")       # OpenAI
-Agent("assistant", model="mistral", api_base="http://localhost:8000/v1")  # vLLM, LM Studio, etc.
-```
-
-## REST API
-
-```python
-from agentu import serve
-
-serve(agent, port=8000, enable_cors=True)
-```
-
-Endpoints: `/execute`, `/process`, `/tools`, `/memory/remember`, `/memory/recall`, `/docs`
-
-### Scaling
-
-```python
-# Multi-worker deployment
-serve(agent, port=8000, workers=4)
-
-# Redis-backed sessions for horizontal scaling
-serve(agent, port=8000, workers=4, redis_url="redis://localhost:6379")
-
-# ASGI app for custom deployment (gunicorn, Docker, k8s)
-from agentu import create_server
-
-app = create_server(agent, enable_cors=True)
-# Run with: uvicorn app:app --workers 4 --host 0.0.0.0
-```
-
-### Async tasks
-
-Long-running `infer()` calls can run in the background:
-
-```python
-# POST /process?background=true → returns task_id immediately
-# GET /tasks/{task_id} → poll for result
-# DELETE /tasks/{task_id} → cancel
-```
-
-## Storage backends
-
-Swap between SQLite and Redis for sessions, checkpoints, and memory:
-
-```python
-# Default — SQLite, zero-config
-agent = Agent("bot")
-
-# Redis — sessions, checkpoints, and serve() use Redis automatically
-agent = Agent("bot").with_backend("redis://localhost:6379")
-
-# LanceDB — vector store for semantic search in custom tools
-agent = Agent("bot").with_vectors("./vectors")
-backend = await agent.get_vector_backend()  # use in your tools
-
-# Or bring your own backend
-from agentu import StorageBackend, VectorBackend
-agent = Agent("bot").with_backend(MyCustomBackend())
-```
+## Observability, evals & CLI
 
 ```bash
-pip install agentu[redis]      # Redis support
-pip install agentu[vectors]    # LanceDB support
-```
+# One-shot prompt from terminal
+agentu run "Summarize recent git commits" --model gemini-2.5-flash
 
-## Workspace
-
-Load an agent from a `.agentu/` directory instead of Python code:
-
-```yaml
-# .agentu/agent.yaml
-name: researcher
-model: gemini-2.5-flash
-temperature: 0.3
-system_prompt: "You are a research assistant."
-
-tools:
-  discover: ./tools    # auto-discover .py files
-
-context:
-  files:
-    - ./context/readme.md
-    - ./context/api-docs.md
-
-backend:
-  storage: redis://localhost:6379
-  vectors: ./vectors
-
-memory:
-  enabled: true
-  short_term_size: 20
-
-permissions:
-  allow_dangerous: true
-```
-
-```python
-agent = await Agent.from_workspace(".agentu/")
-```
-
-`from_workspace()` returns a normal `Agent` — chain on top for runtime config:
-
-```python
-agent = (await Agent.from_workspace(".agentu/"))
-agent.with_hooks(on_tool_call=audit_log).with_schedule(every=30, prompt="check feeds")
-```
-
-Drop a `.py` file in `tools/` — any public function with a docstring becomes a tool:
-
-```python
-# .agentu/tools/sentiment.py
-def analyze_sentiment(text: str) -> dict:
-    """Analyze the sentiment of the given text."""
-    # Tool auto-discovered on startup
-    ...
-```
-
-## API reference
-
-```python
-# Agent
-agent = Agent(name)                       # auto-detect model
-agent = Agent(name, model="qwen3")        # explicit model
-agent = Agent(name, max_turns=5)          # limit multi-turn cycles
-agent.with_tools([func1, func2])          # active tools
-agent.with_tools(defer=[many_funcs])      # searchable tools
-agent.with_cache(preset="smart")          # caching
-agent.with_skills(["github/repo/skill"])  # skills
-agent.with_rules("AGENTS.md")            # project-level rules
-agent.with_notifier(["slack://bot-token"])       # notifications
-agent.with_permissions(allow_dangerous=True)     # permission control
-await agent.with_mcp([url])              # MCP servers
-agent.with_backend("redis://...")         # Redis storage backend
-agent.with_vectors("./vectors")           # LanceDB for remember() + recall(semantic=True)
-agent.with_consolidation(every=30)        # background memory consolidation
-agent.with_inbox("./inbox")              # file watcher → auto-ingest
-agent.with_agents([a1, a2])              # agents as callable tools
-await agent.with_plugins("./plugins/reports") # Agent Plugins v1.0.0 spec
-agent = await Agent.from_workspace(".agentu/")  # load from workspace directory
-
-# Loop Engineering
-agent.with_schedule(every=30, prompt="...")       # interval schedule
-agent.with_schedule(cron="0 9 * * *", prompt="...") # cron schedule
-agent.with_subagents([{...}])                    # inline sub-agents
-agent.with_subagents(".agents/")                 # from directory
-agent.with_worktree()                            # git isolation
-await agent.start()                              # start schedules
-agent.stop()                                     # stop schedules
-agent.findings()                                 # get findings
-await agent.delegate("task")                     # maker-checker
-
-# Sandbox
-agent.with_sandbox(                       # tool isolation
-    read_tools=[search, get_weather],
-    write_tools=[save_file, send_email],
-    timeout=10,
-    max_memory_mb=256,                    # memory limit
-    allow_network=False,                  # egress control
-)
-
-# Guardrails
-agent.with_guardrails(                    # self-correction
-    output_guardrails=[PII()],
-    max_corrections=2,
-)
-
-# Hooks
-agent.with_hooks(                         # pre/post-tool callbacks
-    pre_tool=my_pre_hook,                 # ALLOW/DENY/MODIFY
-    post_tool=my_post_hook,               # transform results
-    on_stop=my_stop_hook,                 # runs when loop ends
-)
-
-# Context management
-agent.with_context(                       # prevents context overflow
-    max_tokens=100_000,
-    compaction="auto",                    # truncate → summarize → keep recent
-)
-
-# Structured outputs
-result = await agent.infer(
-    "Rate this",
-    output_type=MyPydanticModel,          # validated + retry on failure
-)
-
-agent.with_otel(service_name="my-app")    # OpenTelemetry GenAI spans
-
-await agent.call("tool", params)          # direct tool execution
-await agent.infer("natural language")     # multi-turn agentic loop
-await agent.infer("prompt", media=[...])  # mixed media (images, audio, video, docs)
-
-agent.remember(content, importance=0.8)   # store memory
-agent.recall(query, semantic=True)        # semantic memory search
-
-# Sessions
-manager = SessionManager()
-session = manager.create_session(agent)
-await session.send("message")
-session.checkpoint()                # save state
-session = manager.resume("sid", agent)  # restore state
-
-# Evaluation
-results = await evaluate(agent, test_cases)
-results.accuracy     # 95.0
-results.to_json()    # export
-
-# Workflows
-step1 >> step2          # sequential
-step1 & step2           # parallel
-await workflow.run()    # execute
-```
-
-## Zero-Dependency Native Drivers
-
-`agentu` speaks native provider REST protocols directly without requiring 500MB SDKs:
-
-```python
-from agentu.drivers import GeminiDriver, ClaudeDriver, OpenAIDriver, OllamaDriver, get_driver_for_model
-
-# Auto-detected from model name and environment keys
-driver = get_driver_for_model("gemini-2.5-flash")
-
-# Or direct native protocol instantiation:
-gemini = GeminiDriver(model="gemini-2.5-flash")
-claude = ClaudeDriver(model="claude-3-7-sonnet-20250219")
-ollama = OllamaDriver(model="llama3", keep_alive="10m")
-```
-
-## CLI & Interactive Dev Console
-
-```bash
-# Start an interactive agent debugging console
-agentu dev
-
-# Or load and test an existing agent script
+# Interactive dev REPL (preserves live HTTP & MCP sessions across turns)
 agentu dev my_agent.py
 
-# Run autonomous Ralph loop mode
-agentu ralph PROMPT.md --max 50
-
-# Serve agent REST API & dashboard
-agentu serve --port 8000
+# Autonomous Ralph loop or FastAPI + SSE + Dashboard server (pip install "agentu[serve]")
+agentu ralph PROMPT.md --max 30
+agentu serve my_agent.py --port 8000
 ```
 
-## Examples
+Attach OpenTelemetry GenAI spans via `.with_otel()` (`agentu[otel]`), score datasets and tool trajectories with `await evaluate(agent, cases)`, or serve HTTP/SSE/WebSocket endpoints with `serve(agent)`.
 
-```bash
-git clone https://github.com/hemanth/agentu && cd agentu
+## Extras
 
-python examples/01_basics/basic.py              # simple agent
-python examples/01_basics/memory.py             # memory system
-python examples/03_workflow/workflow.py          # workflows
-python examples/04_server/example_sessions.py   # stateful sessions
-python examples/05_observe/example_eval.py      # agent evaluation
-python examples/05_observe/example_observe.py   # observability
-python examples/04_server/api.py                # REST API
-```
+- `pip install "agentu[serve]"` — FastAPI HTTP/SSE/WebSocket server & live dashboard
+- `pip install "agentu[media]"` — Automatic video/PDF-to-Markdown degradation
+- `pip install "agentu[search]"` — Built-in `SearchAgent` & DuckDuckGo `search_tool`
+- `pip install "agentu[semantic]"` / `"agentu[redis]"` / `"agentu[vectors]"` / `"agentu[otel]"` / `"agentu[all]"`
 
-## Testing
+## Related
 
-```bash
-pytest
-pytest --cov=agentu
-```
+- [Interactive Codelab](https://hemanth.github.io/agentu-codelab/) — guided hands-on walkthrough
+- [Playground & Architecture Blueprint](https://hemanth.github.io/agentu/) — live harness simulator
 
 ## License
 
-MIT
+MIT © [Hemanth.HM](https://h3manth.com)

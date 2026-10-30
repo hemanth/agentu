@@ -5,6 +5,27 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-10-29
+
+### Added
+
+- **Zero-Config Provider & Model Routing**: `Agent("bot", model=...)` now auto-wires native protocol drivers (`GeminiDriver`, `ClaudeDriver`, `OpenAIDriver`, `OllamaDriver`) for cloud model names (`gemini-*`, `claude-*`, `gpt-*`, `deepseek-*`) and `provider/model` specs (`openai/...`, `groq/...`, `deepseek/...`, `ollama/...`), with automatic API-key/base-URL env resolution and local-first fallback.
+- **Native Provider Tool-Calling Loop + Rich JSON Schema Tools**: `Tool.to_json_schema()`, `Tool.to_openai_tool()`, and the new `@tool` decorator infer full JSON Schemas (including `Annotated` descriptions, Google/Sphinx docstrings, `Literal`, `Enum`, and nested Pydantic models) and execute multi-turn native function-calling round-trips across all four drivers.
+- **Tools + `output_type` Composition**: `agent.with_tools([...]).infer("...", output_type=Model)` now executes tools first and synthesizes a validated Pydantic `InferResult[Model]` with both `.data` and `.tool_calls` preserved.
+- **Unified `InferResult[T]` + PEP 561 Typing + Sync `agent.run()`**: Every `infer()` path (conversational, native tools, Code Mode, and structured output) returns a dict-compatible `InferResult`, backed by `@overload` signatures and `py.typed` for static IDE autocomplete, plus `agent.run()` for synchronous scripts.
+- **Upgraded `agentu` CLI**: Added `agentu run "<prompt>"` (`--stream`, `--json`, `--agent`) and upgraded `agentu dev` to run inside a single persistent event loop with `/tools`, `/model`, `/stream`, `/history`, `/memory`, and `/clear`.
+
+### Changed
+
+- **Zero-Bloat Core Packaging & Lazy Module Exports**: Trimmed core install dependencies in `pyproject.toml` to just `aiohttp` and `pydantic` (moving `fastapi`/`uvicorn` to `agentu[serve]` and `ddgs` to `agentu[search]`), and converted `agentu.__init__` to PEP 562 lazy loading (`~8.5x` faster cold `import agentu`).
+- **Docs & Playground**: Distilled `README.md` into a concise, copy-paste-runnable guide and rebuilt `docs/index.html` + `docs/flow-diagram.svg` with an interactive Harness Switchboard simulator and monochrome architecture blueprint.
+
+### Fixed
+
+- Fixed `agentu dev` creating and destroying a new `asyncio` event loop per prompt (which broke pooled driver HTTP sessions and live MCP connections).
+- Fixed zero-tool `agent.infer("Hello")` returning `"No appropriate tool found"` instead of a direct conversational reply.
+- Removed module-import-time `logging.basicConfig()` call in `agentu.mcp.tool` so importing MCP adapters never overrides host application logging.
+
 ## [2.9.1] - 2026-10-12
 
 ### Fixed

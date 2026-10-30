@@ -1,7 +1,6 @@
 """Search functionality for agentu."""
 import asyncio
 from typing import List, Dict, Any, Optional
-from ddgs import DDGS
 
 from .._core.agent import Agent
 from .._core.tools import Tool
@@ -25,8 +24,15 @@ async def search_duckduckgo(
         List of dictionaries containing search results with title, link, and snippet
     """
     try:
+        from ddgs import DDGS
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "Web search requires the [search] extra: pip install 'agentu[search]'"
+        ) from exc
+
+    try:
         # Run blocking search in executor
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         def _search():
             with DDGS() as ddgs:
                 results = list(ddgs.text(

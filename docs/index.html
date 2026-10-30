@@ -3,173 +3,871 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>agentu - AI Agent Runtime</title>
-  <meta name="description" content="A harness-engineered AI agent runtime. Build agents with tool isolation, self-correction, and permission scoping.">
+  <title>agentu — Harness-Engineered Python Agent Runtime</title>
+  <meta name="description" content="Run AI agents in Python with subprocess tool isolation, Code Mode execution, self-correcting guardrails, and zero-SDK native drivers.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Playfair+Display:ital,wght@0,600;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    * { margin: 0; box-sizing: border-box; }
     :root {
-      --bg: #0a0e1a;
-      --bg-surface: #141824;
-      --border: #1e2536;
-      --text: #e2e8f0;
-      --text-muted: #8892a8;
-      --accent: #2dd4bf;
+      --canvas: #fbfaf7;
+      --surface: #ffffff;
+      --surface-subtle: #f4f1ea;
+      --border: #e5e1d8;
+      --border-strong: #cfc9bc;
+      --ink: #141413;
+      --ink-muted: #5c5952;
+      --ink-faint: #8a857b;
+      --sage-bg: #edf6f0;
+      --sage-fg: #1b6543;
+      --sage-bd: #c5e3cf;
+      --peach-bg: #fdf0e6;
+      --peach-fg: #a84315;
+      --peach-bd: #f3cdb3;
+      --butter-bg: #fef8e6;
+      --butter-fg: #875e0f;
+      --butter-bd: #f1de9f;
+      --coral-bg: #fdeeed;
+      --coral-fg: #ad2419;
+      --coral-bd: #f5c5c1;
+      --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+      --sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --serif: 'Playfair Display', Georgia, serif;
     }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
     body {
-      font-family: 'Inter', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 40px 24px;
-    }
-    .hero {
-      text-align: center;
-      max-width: 640px;
-    }
-    .badge {
-      display: inline-block;
-      padding: 4px 14px;
-      border-radius: 20px;
-      background: rgba(45, 212, 191, 0.08);
-      color: var(--accent);
-      font-size: 0.7rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      border: 1px solid rgba(45, 212, 191, 0.2);
-      margin-bottom: 20px;
-    }
-    h1 {
-      font-size: 3rem;
-      font-weight: 800;
-      line-height: 1.1;
-      margin-bottom: 16px;
-    }
-    .gradient {
-      background: linear-gradient(135deg, var(--accent), #67e8f9);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    .subtitle {
-      font-size: 1.1rem;
-      color: var(--text-muted);
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: var(--sans);
       line-height: 1.6;
-      margin-bottom: 36px;
+      -webkit-font-smoothing: antialiased;
+      position: relative;
     }
-    .install {
-      display: inline-block;
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 24px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.95rem;
-      color: var(--accent);
-      margin-bottom: 40px;
+
+    /* Fine-grain paper noise overlay */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 999;
+      opacity: 0.028;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
     }
-    .links {
+
+    /* Sticky Frosted Nav */
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(251, 250, 247, 0.86);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 14px 24px;
       display: flex;
-      gap: 12px;
-      justify-content: center;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      color: var(--ink);
+      font-weight: 700;
+      font-size: 0.98rem;
+    }
+    .brand-badge {
+      background: var(--ink);
+      color: #ffffff;
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 5px;
+      letter-spacing: 0.04em;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
       flex-wrap: wrap;
     }
-    .link {
-      padding: 12px 28px;
-      border-radius: 10px;
+    .nav-links a {
+      color: var(--ink-muted);
+      text-decoration: none;
+      font-size: 0.86rem;
+      font-weight: 500;
+      transition: color 0.15s;
+    }
+    .nav-links a:hover { color: var(--ink); }
+    .nav-cta {
+      background: var(--ink);
+      color: #ffffff !important;
+      padding: 6px 14px;
+      border-radius: 7px;
+      font-size: 0.82rem !important;
+      font-weight: 600 !important;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 76px 0 56px;
+      border-bottom: 1px solid var(--border);
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--peach-bg);
+      color: var(--peach-fg);
+      border: 1px solid var(--peach-bd);
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      font-size: clamp(2.3rem, 5vw, 3.6rem);
+      line-height: 1.08;
+      letter-spacing: -0.03em;
+      font-weight: 700;
+      max-width: 820px;
+      margin-bottom: 18px;
+    }
+    .hero h1 em {
+      font-family: var(--serif);
+      font-style: italic;
+      font-weight: 600;
+    }
+    .hero-sub {
+      font-size: 1.12rem;
+      color: var(--ink-muted);
+      max-width: 660px;
+      margin-bottom: 28px;
+    }
+    .hero-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .install-box {
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 9px;
+      padding: 10px 14px 10px 18px;
+      font-family: var(--mono);
+      font-size: 0.9rem;
+    }
+    .copy-btn {
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .copy-btn:hover {
+      background: var(--ink);
+      color: #ffffff;
+      border-color: var(--ink);
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 20px;
+      border-radius: 9px;
       font-size: 0.9rem;
       font-weight: 600;
       text-decoration: none;
-      transition: transform 0.2s, box-shadow 0.2s;
-      font-family: 'Inter', system-ui, sans-serif;
+      transition: transform 0.15s, background 0.15s;
     }
-    .link:hover { transform: translateY(-1px); }
-    .link.primary {
-      background: linear-gradient(135deg, var(--accent), #67e8f9);
-      color: #0a0e1a;
-      box-shadow: 0 4px 16px rgba(45, 212, 191, 0.25);
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary { background: var(--ink); color: #ffffff; }
+    .btn-outline { background: var(--surface); color: var(--ink); border: 1px solid var(--border-strong); }
+
+    .metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
     }
-    .link.primary:hover { box-shadow: 0 6px 24px rgba(45, 212, 191, 0.35); }
-    .link.secondary {
-      background: var(--bg-surface);
-      color: var(--text);
+    .pill {
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      padding: 5px 12px;
+      border-radius: 6px;
       border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--ink-muted);
     }
-    .link.secondary:hover { border-color: var(--accent); color: var(--accent); }
-    .features {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 12px;
-      max-width: 640px;
-      margin-top: 48px;
+    .pill strong { color: var(--ink); font-weight: 600; }
+
+    /* Sections */
+    section {
+      padding: 60px 0;
+      border-bottom: 1px solid var(--border);
     }
-    .feature {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 16px 18px;
-    }
-    .feature h3 {
-      font-size: 0.85rem;
+    .sec-kicker {
+      font-family: var(--mono);
+      font-size: 0.73rem;
       font-weight: 600;
-      margin-bottom: 4px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 8px;
     }
-    .feature p {
+    .sec-title {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 10px;
+    }
+    .sec-desc {
+      color: var(--ink-muted);
+      max-width: 680px;
+      margin-bottom: 28px;
+      font-size: 0.98rem;
+    }
+
+    /* Why Grid */
+    .why-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px;
+    }
+    .card-tag {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+    }
+    .tag-sage { background: var(--sage-bg); color: var(--sage-fg); border: 1px solid var(--sage-bd); }
+    .tag-peach { background: var(--peach-bg); color: var(--peach-fg); border: 1px solid var(--peach-bd); }
+    .tag-butter { background: var(--butter-bg); color: var(--butter-fg); border: 1px solid var(--butter-bd); }
+    .tag-coral { background: var(--coral-bg); color: var(--coral-fg); border: 1px solid var(--coral-bd); }
+    .card h3 { font-size: 1.04rem; margin-bottom: 8px; }
+    .card p { font-size: 0.88rem; color: var(--ink-muted); }
+
+    /* Interactive Harness Workbench */
+    .workbench {
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .wb-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      background: var(--surface-subtle);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px 0;
+      gap: 6px;
+    }
+    .wb-tab {
+      background: transparent;
+      border: 1px solid transparent;
+      border-bottom: none;
+      padding: 9px 15px;
+      font-family: var(--mono);
       font-size: 0.78rem;
-      color: var(--text-muted);
-      line-height: 1.4;
+      font-weight: 500;
+      color: var(--ink-muted);
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+    }
+    .wb-tab.active {
+      background: var(--surface);
+      color: var(--ink);
+      font-weight: 600;
+      border-color: var(--border);
+    }
+    .wb-body {
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      min-height: 360px;
+    }
+    @media (max-width: 820px) {
+      .wb-body { grid-template-columns: 1fr; }
+    }
+    .wb-left {
+      padding: 22px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .wb-right {
+      padding: 22px;
+      background: #faf8f3;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .wb-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .toggle-chip {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .toggle-chip.on {
+      background: var(--ink);
+      color: #ffffff;
+      border-color: var(--ink);
+    }
+    pre.code {
+      background: #161615;
+      color: #f4f1ea;
+      padding: 16px 18px;
+      border-radius: 9px;
+      font-family: var(--mono);
+      font-size: 0.79rem;
+      line-height: 1.55;
+      overflow-x: auto;
+    }
+    .trace-step {
+      padding: 10px 13px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+    }
+    .trace-step .hdr {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+      margin-bottom: 3px;
+    }
+    .trace-step.ok { border-color: var(--sage-bd); background: var(--sage-bg); color: var(--sage-fg); }
+    .trace-step.warn { border-color: var(--butter-bd); background: var(--butter-bg); color: var(--butter-fg); }
+    .trace-step.err { border-color: var(--coral-bd); background: var(--coral-bg); color: var(--coral-fg); }
+    .wb-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: auto;
+    }
+    .stat-cell {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px 10px;
+      font-family: var(--mono);
+    }
+    .stat-cell .lbl { font-size: 0.67rem; color: var(--ink-faint); text-transform: uppercase; }
+    .stat-cell .val { font-size: 0.92rem; font-weight: 600; color: var(--ink); }
+
+    /* Blueprint frame */
+    .blueprint-frame {
+      background: #ffffff;
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      padding: 20px;
+      overflow-x: auto;
+    }
+    .blueprint-frame img {
+      display: block;
+      width: 100%;
+      max-width: 960px;
+      height: auto;
+      margin: 0 auto;
+    }
+
+    /* Comparison matrix */
+    .matrix-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink-muted);
+      background: var(--surface-subtle);
+    }
+    tr:last-child td { border-bottom: none; }
+    td code {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      background: var(--surface-subtle);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    /* Recipes */
+    .recipes {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+      gap: 18px;
     }
     @media (max-width: 600px) {
-      body { padding: 32px 16px; }
-      h1 { font-size: 2.2rem; }
-      .subtitle { font-size: 0.95rem; margin-bottom: 24px; }
-      .install { font-size: 0.82rem; padding: 10px 18px; margin-bottom: 28px; }
-      .links { flex-direction: column; align-items: stretch; gap: 10px; }
-      .link { text-align: center; padding: 14px 20px; }
-      .features { grid-template-columns: 1fr 1fr; margin-top: 32px; gap: 10px; }
-      .feature { padding: 14px 16px; }
+      .recipes { grid-template-columns: 1fr; }
     }
-    @media (max-width: 380px) {
-      h1 { font-size: 1.8rem; }
-      .features { grid-template-columns: 1fr; }
+    .recipe-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
+    .recipe-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .recipe-head h3 { font-size: 0.98rem; }
+
+    footer {
+      padding: 40px 0 56px;
+      color: var(--ink-muted);
+      font-size: 0.86rem;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    footer a { color: var(--ink); text-decoration: none; font-weight: 500; }
   </style>
 </head>
 <body>
-  <div class="hero">
-    <span class="badge">Python Agent Framework</span>
-    <h1><span class="gradient">agentu</span></h1>
-    <p class="subtitle">A harness-engineered AI agent runtime. Build agents with tool isolation, self-correction, and permission scoping out of the box.</p>
-    <code class="install">pip install agentu</code>
-    <div class="links">
-      <a href="https://hemanth.github.io/agentu-codelab/" class="link primary">Interactive Codelab</a>
-      <a href="https://github.com/hemanth/agentu" class="link secondary">GitHub</a>
-      <a href="https://pypi.org/project/agentu/" class="link secondary">PyPI</a>
+  <header class="nav">
+    <div class="nav-inner">
+      <a href="#" class="brand">
+        <span class="brand-badge">agentu</span>
+        <span>v2.10 Runtime</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#why">Why Harness</a>
+        <a href="#workbench">Switchboard</a>
+        <a href="#blueprint">Architecture</a>
+        <a href="#recipes">Recipes</a>
+        <a href="https://hemanth.github.io/agentu-codelab/">Codelab</a>
+        <a href="https://github.com/hemanth/agentu" class="nav-cta">GitHub ↗</a>
+      </nav>
     </div>
-  </div>
-  <div class="features">
-    <div class="feature">
-      <h3>Tool Isolation</h3>
-      <p>Sandboxed subprocess execution with read/write permission scoping.</p>
-    </div>
-    <div class="feature">
-      <h3>Self-Correction</h3>
-      <p>Guardrails that auto-retry with violation feedback to the LLM.</p>
-    </div>
-    <div class="feature">
-      <h3>MCP Protocol</h3>
-      <p>Connect to external tool servers with authenticated transports.</p>
-    </div>
-    <div class="feature">
-      <h3>Observable</h3>
-      <p>Built-in cost tracking, logging, and structured event capture.</p>
-    </div>
-  </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="eyebrow">Harness-Engineered Python Agent Runtime</div>
+      <h1>Isolate tools, <em>self-correct</em> failures, and ship agents without SDK bloat.</h1>
+      <p class="hero-sub">
+        Subprocess tool sandboxing, single-turn Python Code Mode, typed Pydantic generics, and native REST/SSE drivers for Gemini, Claude, OpenAI, and Ollama — on top of just <code>aiohttp</code> and <code>pydantic</code>.
+      </p>
+      <div class="hero-bar">
+        <div class="install-box">
+          <span id="pip-cmd">pip install agentu</span>
+          <button class="copy-btn" onclick="copyText('pip install agentu', this)">Copy</button>
+        </div>
+        <a href="https://hemanth.github.io/agentu-codelab/" class="btn btn-primary">Interactive Codelab →</a>
+        <a href="https://pypi.org/project/agentu/" class="btn btn-outline">PyPI Package</a>
+      </div>
+      <div class="metrics">
+        <span class="pill"><strong>2</strong> Core Dependencies (<code>aiohttp</code> + <code>pydantic</code>)</span>
+        <span class="pill"><strong>0</strong> Vendor SDKs Required</span>
+        <span class="pill"><strong>~44ms</strong> Cold Import</span>
+        <span class="pill"><strong>PEP 561</strong> Typed <code>InferResult[T]</code></span>
+      </div>
+    </section>
+
+    <section id="why">
+      <div class="sec-kicker">01 · First Principles</div>
+      <h2 class="sec-title">Why agent wrappers break in production</h2>
+      <p class="sec-desc">
+        Prompt-only frameworks run untrusted tools inside your main event loop, burn 5+ LLM round-trips chaining trivial calls, and pull 40+ transitive SDK packages. <code>agentu</code> treats the harness itself as a systems problem.
+      </p>
+      <div class="why-grid">
+        <div class="card">
+          <span class="card-tag tag-coral">Isolation</span>
+          <h3>Subprocess Sandboxing &amp; Lethal Trifecta</h3>
+          <p>Run tools in child processes with <code>RLIMIT_AS</code> memory caps, hard timeouts, outbound network blocking, and automatic detection when private reads + untrusted inputs + external comms combine.</p>
+        </div>
+        <div class="card">
+          <span class="card-tag tag-peach">Efficiency</span>
+          <h3>Code Mode Execution (<code>tools.*</code>)</h3>
+          <p>LLMs have trained on billions of lines of real Python. Let the model write one restricted Python script calling your typed tools in a single round-trip instead of fragile multi-turn JSON ping-pong.</p>
+        </div>
+        <div class="card">
+          <span class="card-tag tag-sage">Reliability</span>
+          <h3>Closed-Loop Self-Correction</h3>
+          <p>When PII guardrails trip, Pydantic <code>output_type</code> validation fails, or Code Mode throws a <code>KeyError</code>, <code>agentu</code> feeds structured error diagnostics back to the model automatically.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="workbench">
+      <div class="sec-kicker">02 · Interactive Harness Switchboard</div>
+      <h2 class="sec-title">Simulate the runtime loop</h2>
+      <p class="sec-desc">
+        Toggle real harness configurations below to inspect how <code>agentu</code> alters execution traces, enforces isolation boundaries, and validates outputs.
+      </p>
+
+      <div class="workbench">
+        <div class="wb-tabs" role="tablist">
+          <button class="wb-tab active" onclick="selectTab('codemode', this)">1. Code Mode vs JSON Loop</button>
+          <button class="wb-tab" onclick="selectTab('sandbox', this)">2. Sandbox &amp; Lethal Trifecta</button>
+          <button class="wb-tab" onclick="selectTab('guardrail', this)">3. Self-Correcting InferResult[T]</button>
+          <button class="wb-tab" onclick="selectTab('media', this)">4. Multimodal Degradation</button>
+        </div>
+        <div class="wb-body">
+          <div class="wb-left">
+            <div>
+              <div class="wb-controls" id="wb-controls"></div>
+              <pre class="code" id="wb-code" style="margin-top: 14px;"></pre>
+            </div>
+            <div style="font-size: 0.82rem; color: var(--ink-muted);" id="wb-note"></div>
+          </div>
+          <div class="wb-right">
+            <div style="font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-faint);">Live Harness Execution Trace</div>
+            <div id="wb-trace" style="display: flex; flex-direction: column; gap: 8px;"></div>
+            <div class="wb-stats" id="wb-stats"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="blueprint">
+      <div class="sec-kicker">03 · Architecture Blueprint</div>
+      <h2 class="sec-title">Request lifecycle &amp; isolation boundaries</h2>
+      <p class="sec-desc">
+        Solid enclosures execute deterministically inside your Python process; dashed enclosures cross network or OS subprocess boundaries.
+      </p>
+      <div class="blueprint-frame">
+        <img src="./flow-diagram.svg" alt="agentu architecture blueprint diagram">
+      </div>
+    </section>
+
+    <section id="footprint">
+      <div class="sec-kicker">04 · Engineering Matrix</div>
+      <h2 class="sec-title">Zero-bloat footprint</h2>
+      <p class="sec-desc">
+        Pay only for what you import. Everything outside the two-dependency core loads lazily via PEP 562 module attributes.
+      </p>
+      <div class="matrix-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th><code>agentu</code> Core</th>
+              <th>Typical Heavy Agent SDK</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Install Footprint</strong></td>
+              <td><code>aiohttp</code> + <code>pydantic</code> (2 packages)</td>
+              <td>35–70 transitive provider &amp; telemetry packages</td>
+            </tr>
+            <tr>
+              <td><strong>Provider Routing</strong></td>
+              <td>Built-in native REST/SSE drivers (<code>gemini-*</code>, <code>claude-*</code>, <code>gpt-*</code>, <code>ollama/*</code>)</td>
+              <td>Separate vendor SDK per provider</td>
+            </tr>
+            <tr>
+              <td><strong>Tool Execution</strong></td>
+              <td>In-process OR OS subprocess sandbox (<code>RLIMIT_AS</code> + timeout + net block)</td>
+              <td>Unrestricted in-process execution</td>
+            </tr>
+            <tr>
+              <td><strong>Tools + Structured Output</strong></td>
+              <td>Native composition → validated <code>InferResult[T]</code> with auto-retry</td>
+              <td>Often mutually exclusive or manual two-step wiring</td>
+            </tr>
+            <tr>
+              <td><strong>Video / PDF on Text Models</strong></td>
+              <td>Automatic Markdown transcript degradation (<code>agentu[media]</code>)</td>
+              <td>Hard 400 API error on unsupported MIME parts</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="recipes">
+      <div class="sec-kicker">05 · Copy-Pasteable Recipes</div>
+      <h2 class="sec-title">Production patterns in 10 lines</h2>
+      <div class="recipes">
+        <div class="recipe-card">
+          <div class="recipe-head">
+            <h3>Zero-Config Tool + Typed Output</h3>
+            <span class="card-tag tag-sage" style="margin:0;">PEP 561 Typed</span>
+          </div>
+<pre class="code">from pydantic import BaseModel
+from agentu import Agent, tool
+
+class Quote(BaseModel):
+    sku: str
+    total_usd: float
+
+@tool(readonly=True)
+def fetch_price(sku: str) -> float:
+    """Lookup unit price in USD."""
+    return 1299.0
+
+agent = Agent("sales", model="gemini-2.5-flash").with_tools([fetch_price])
+res = agent.run("Quote 2 units of X1-CARBON", output_type=Quote)
+print(res.data.sku, res.data.total_usd)</pre>
+        </div>
+
+        <div class="recipe-card">
+          <div class="recipe-head">
+            <h3>Subprocess Sandbox + Guardrails</h3>
+            <span class="card-tag tag-peach" style="margin:0;">Isolated</span>
+          </div>
+<pre class="code">from agentu import Agent, PII, ContentFilter
+
+agent = (
+    Agent("ops", model="claude-sonnet-4-20250514")
+    .with_sandbox(
+        read_tools=[query_metrics],
+        write_tools=[write_incident_note],
+        timeout=8,
+        max_memory_mb=256,
+        allow_network=False,
+    )
+    .with_guardrails(output_guardrails=[PII(), ContentFilter()], max_corrections=2)
+)
+res = await agent.infer("Summarize today's error spike")</pre>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div>MIT © <a href="https://h3manth.com">Hemanth.HM</a> · Built with first-principles harness engineering.</div>
+      <div style="display:flex; gap:18px;">
+        <a href="https://github.com/hemanth/agentu">GitHub</a>
+        <a href="https://pypi.org/project/agentu/">PyPI</a>
+        <a href="https://hemanth.github.io/agentu-codelab/">Codelab</a>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    const SCENARIOS = {
+      codemode: {
+        controls: [
+          { id: "cm_on", label: "codemode=True (Single-Turn Python)", active: true },
+          { id: "cm_off", label: "codemode=False (Multi-Turn JSON)", active: false }
+        ],
+        variants: {
+          cm_on: {
+            code: `agent = Agent("bot", model="claude-sonnet-4-20250514", codemode=True)\\n    .with_tools([search_orders, compute_tax, save_csv])\\n\\nres = await agent.infer("Export Q3 orders with tax")`,
+            note: "LLM emits one restricted Python block calling tools.* directly. Safe stdlib allowed; os/subprocess/socket blocked at import.",
+            trace: [
+              { kind: "ok", title: "1. LLM_REQUEST (codemode stub prompt)", body: "Generated 6-line Python script chaining search_orders → compute_tax → save_csv" },
+              { kind: "ok", title: "2. CODEMODE_EXEC (sandboxed builtins)", body: "Executed 3 tool calls in 1 pass · 0 disallowed imports" },
+              { kind: "ok", title: "3. InferResult", body: "res.text = 'Saved 42 Q3 rows to q3_tax.csv'" }
+            ],
+            stats: [["LLM Round-Trips", "1"], ["Prompt Tokens", "410"], ["Latency", "680ms"]]
+          },
+          cm_off: {
+            code: `agent = Agent("bot", model="claude-sonnet-4-20250514", codemode=False)\\n    .with_tools([search_orders, compute_tax, save_csv])\\n\\nres = await agent.infer("Export Q3 orders with tax")`,
+            note: "Standard native tool loop: each sequential dependency requires a full LLM round-trip with growing message history.",
+            trace: [
+              { kind: "", title: "Turn 1 → tool_use: search_orders", body: "Returned 42 raw order JSON objects into context window" },
+              { kind: "", title: "Turn 2 → tool_use: compute_tax", body: "Re-sent full conversation + 42 orders to compute tax" },
+              { kind: "", title: "Turn 3 → tool_use: save_csv", body: "Serialized rows back through tool arguments" },
+              { kind: "ok", title: "Turn 4 → Final assistant summary", body: "Completed after 4 sequential network round-trips" }
+            ],
+            stats: [["LLM Round-Trips", "4"], ["Prompt Tokens", "2,890"], ["Latency", "2,940ms"]]
+          }
+        }
+      },
+      sandbox: {
+        controls: [
+          { id: "sb_guarded", label: "Lethal Trifecta Guard ON", active: true },
+          { id: "sb_timeout", label: "Simulate Hung Subprocess (12s > 5s)", active: false }
+        ],
+        variants: {
+          sb_guarded: {
+            code: `@tool(reads_private=True)\\ndef read_env_secrets() -> str: ...\\n\\n@tool(ingests_untrusted=True)\\ndef parse_webhook(body: str) -> dict: ...\\n\\n@tool(communicates_externally=True)\\ndef post_slack(url: str, msg: str) -> None: ...`,
+            note: "Combining private data access + untrusted input + external egress creates prompt-injection exfiltration risk. agentu flags & spotlights untrusted outputs.",
+            trace: [
+              { kind: "warn", title: "1. SAFETY_AUDIT (check_lethal_trifecta)", body: "Detected Private Read + Untrusted Input + External Comms on same agent" },
+              { kind: "ok", title: "2. SPOTLIGHT_UNTRUSTED", body: "Wrapped parse_webhook output in untrusted data delimiters" },
+              { kind: "err", title: "3. PRE_TOOL HOOK / PERMISSION", body: "Blocked unapproved external POST containing private secret token" }
+            ],
+            stats: [["Process Isolation", "Child PID"], ["Network", "Blocked"], ["Exfiltration", "0 bytes"]]
+          },
+          sb_timeout: {
+            code: `agent = Agent("worker").with_sandbox(\\n    read_tools=[run_heavy_parser],\\n    timeout=5,\\n    max_memory_mb=256,\\n    allow_network=False,\\n)`,
+            note: "Hung or runaway tools execute in a separate OS process — SIGKILL reaps the child while your FastAPI/asyncio loop stays healthy.",
+            trace: [
+              { kind: "", title: "1. SUBPROCESS_SPAWN", body: "RLIMIT_AS=256MB · HTTP_PROXY=127.0.0.1:0 · permission=READONLY" },
+              { kind: "err", title: "2. TIMEOUT (5.00s elapsed)", body: "Killed runaway child process · parent event loop unaffected" },
+              { kind: "warn", title: "3. SELF_CORRECTION TURN", body: "Fed timeout diagnostic to LLM → fell back to lightweight summary" }
+            ],
+            stats: [["Main Loop Block", "0ms"], ["Memory Cap", "256 MB"], ["Agent Crash", "Prevented"]]
+          }
+        }
+      },
+      guardrail: {
+        controls: [
+          { id: "gr_retry", label: "PII + Pydantic Auto-Retry (max_corrections=2)", active: true },
+          { id: "gr_strict", label: "Zero Retries (Fail Fast)", active: false }
+        ],
+        variants: {
+          gr_retry: {
+            code: `class TicketReply(BaseModel):\\n    message: str\\n    confidence: float = Field(ge=0.0, le=1.0)\\n\\nres = await agent.with_guardrails(\\n    output_guardrails=[PII()], max_corrections=2\\n).infer("Draft customer reply", output_type=TicketReply)`,
+            note: "Both output guardrails and Pydantic schema constraints feed structured violation reasons back into the model.",
+            trace: [
+              { kind: "err", title: "Attempt 1 · Guardrail Violation", body: "PII detected email 'alice@acme.io' + confidence=1.4 (> 1.0)" },
+              { kind: "warn", title: "Self-Correction Feedback", body: "Injected field error & PII redaction rule into retry prompt" },
+              { kind: "ok", title: "Attempt 2 · Validated InferResult[TicketReply]", body: "res.data.confidence = 0.94 · 0 PII leaks" }
+            ],
+            stats: [["Attempts", "2 / 3"], ["Return Type", "InferResult[T]"], ["PII Leaked", "0"]]
+          },
+          gr_strict: {
+            code: `res = await agent.with_guardrails(\\n    output_guardrails=[PII()], max_corrections=0\\n).infer("Draft customer reply", output_type=TicketReply)`,
+            note: "With max_corrections=0, violations raise GuardrailError or StructuredOutputError immediately with full inspection metadata.",
+            trace: [
+              { kind: "err", title: "Attempt 1 · GuardrailError Raised", body: "Direction='output' · Violation='PII: email address detected'" }
+            ],
+            stats: [["Attempts", "1 / 1"], ["Exception", "GuardrailError"], ["PII Leaked", "0"]]
+          }
+        }
+      },
+      media: {
+        controls: [
+          { id: "md_gemini", label: "Target: gemini-2.5-flash (Native)", active: true },
+          { id: "md_deepseek", label: "Target: deepseek-chat (Markdown Fallback)", active: false }
+        ],
+        variants: {
+          md_gemini: {
+            code: `agent = Agent("vision", model="gemini-2.5-flash")\\nres = await agent.infer("Compare talk & spec", media=[\\n    {"type": "video", "url": "https://youtu.be/7Z5Vy9JBANs", "processing": "agentic"},\\n    "./spec.pdf",\\n])`,
+            note: "GeminiDriver supports native video & PDF parts, forwarding file_data + extra metadata (processing='agentic') directly.",
+            trace: [
+              { kind: "ok", title: "1. CAPABILITY_CHECK (GeminiDriver)", body: "image=True · video=True · audio=True · document=True" },
+              { kind: "ok", title: "2. NATIVE_PART_ENCODE", body: "Encoded file_uri + processing='agentic' & inline PDF base64" },
+              { kind: "ok", title: "3. GenerateContent (x-goog-api-key)", body: "Synthesized cross-modal comparison in 1 call" }
+            ],
+            stats: [["Transcoding", "None (Native)"], ["Header Auth", "x-goog-api-key"], ["Modalities", "Video + PDF"]]
+          },
+          md_deepseek: {
+            code: `agent = Agent("text", model="deepseek-chat")\\nres = await agent.infer("Compare talk & spec", media=[\\n    "https://youtu.be/7Z5Vy9JBANs",\\n    "./spec.pdf",\\n])`,
+            note: "Text-only endpoints can't ingest raw video/PDF bytes. agentu offloads transcript & document extraction to a worker thread automatically.",
+            trace: [
+              { kind: "warn", title: "1. CAPABILITY_CHECK (OpenAIDriver: deepseek-chat)", body: "video=False · document=False → triggering Markdown degradation" },
+              { kind: "ok", title: "2. ASYNC_TO_THREAD CONVERSION", body: "Extracted YouTube timed transcript + MarkItDown PDF sections" },
+              { kind: "ok", title: "3. CHAT_COMPLETIONS", body: "Delivered structured Markdown context cleanly with 0 400 errors" }
+            ],
+            stats: [["Transcoding", "Auto Markdown"], ["Event Loop Block", "0ms"], ["Compatibility", "Any Text LLM"]]
+          }
+        }
+      }
+    };
+
+    let currentTab = "codemode";
+    let currentVariant = "cm_on";
+
+    function selectTab(tabKey, btn) {
+      currentTab = tabKey;
+      currentVariant = SCENARIOS[tabKey].controls[0].id;
+      document.querySelectorAll(".wb-tab").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      renderWorkbench();
+    }
+
+    function selectVariant(varId) {
+      currentVariant = varId;
+      renderWorkbench();
+    }
+
+    function renderWorkbench() {
+      const sc = SCENARIOS[currentTab];
+      const v = sc.variants[currentVariant];
+
+      const ctrlEl = document.getElementById("wb-controls");
+      ctrlEl.innerHTML = sc.controls.map(c =>
+        `<button class="toggle-chip ${c.id === currentVariant ? 'on' : ''}" onclick="selectVariant('${c.id}')">${c.label}</button>`
+      ).join("");
+
+      document.getElementById("wb-code").textContent = v.code.replace(/\\n/g, "\n");
+      document.getElementById("wb-note").textContent = v.note;
+
+      document.getElementById("wb-trace").innerHTML = v.trace.map(t =>
+        `<div class="trace-step ${t.kind}">
+          <div class="hdr"><span>${t.title}</span></div>
+          <div style="opacity:0.9;">${t.body}</div>
+        </div>`
+      ).join("");
+
+      document.getElementById("wb-stats").innerHTML = v.stats.map(([lbl, val]) =>
+        `<div class="stat-cell"><div class="lbl">${lbl}</div><div class="val">${val}</div></div>`
+      ).join("");
+    }
+
+    function copyText(txt, btn) {
+      navigator.clipboard.writeText(txt);
+      const prev = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = prev; }, 1400);
+    }
+
+    renderWorkbench();
+  </script>
 </body>
 </html>

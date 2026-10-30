@@ -41,6 +41,54 @@ class OllamaDriver(BaseDriver):
         ))
         return {"image": vision, "audio": False, "video": False, "document": False}
 
+    @staticmethod
+    def _normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for msg in messages:
+            if msg.get("role") == "tool":
+                normalized.append({
+                    "role": "tool",
+                    "content": str(msg.get("content", "")),
+                })
+                continue
+            if msg.get("tool_calls"):
+                calls = []
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {})
+                    args = fn.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    calls.append({"function": {"name": fn.get("name", ""), "arguments": args}})
+                normalized.append({
+                    "role": msg.get("role", "assistant"),
+                    "content": msg.get("content") or "",
+                    "tool_calls": calls,
+                })
+                continue
+            normalized.append(msg)
+        return normalized
+
+    @staticmethod
+    def _parse_tool_calls(raw_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        parsed: List[Dict[str, Any]] = []
+        for idx, tc in enumerate(raw_calls or []):
+            fn = tc.get("function", {})
+            args = fn.get("arguments", {})
+            if not isinstance(args, str):
+                args = json.dumps(args)
+            parsed.append({
+                "id": tc.get("id") or f"ollama_call_{idx}",
+                "type": "function",
+                "function": {
+                    "name": fn.get("name", ""),
+                    "arguments": args,
+                },
+            })
+        return parsed
+
     async def call(
         self,
         messages: List[Dict[str, Any]],
@@ -52,15 +100,17 @@ class OllamaDriver(BaseDriver):
         url = f"{self.api_base}/api/chat"
         body: Dict[str, Any] = {
             "model": self.model,
-            "messages": messages,
+            "messages": self._normalize_messages(messages),
             "stream": stream,
             "keep_alive": self.keep_alive,
             "options": {
                 "temperature": self.temperature,
             },
         }
+        if tools:
+            body["tools"] = tools
         if output_schema:
-            body["format"] = "json"
+            body["format"] = output_schema if isinstance(output_schema, dict) else "json"
 
         session = await self._get_session()
         async with session.post(
@@ -74,11 +124,12 @@ class OllamaDriver(BaseDriver):
 
         msg = data.get("message", {})
         text = msg.get("content", "")
+        tool_calls = self._parse_tool_calls(msg.get("tool_calls", []))
 
         return DriverResponse(
             text=text,
             raw=data,
-            tool_calls=[],
+            tool_calls=tool_calls,
             prompt_tokens=data.get("prompt_eval_count", 0),
             completion_tokens=data.get("eval_count", 0),
             model=data.get("model", self.model or ""),

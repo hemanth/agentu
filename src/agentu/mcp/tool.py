@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from .._core.tools import Tool
 from .transport import MCPTransport, MCPServerConfig, create_transport
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -112,7 +111,8 @@ class MCPToolAdapter:
                     name=prefixed_name,
                     description=f"[MCP:{self.server_config.name}] {description}",
                     function=tool_function,
-                    parameters=parameters
+                    parameters=parameters,
+                    schema=input_schema or None,
                 )
 
                 tools.append(tool)

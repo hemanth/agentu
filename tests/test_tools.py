@@ -68,3 +68,65 @@ def test_tool_custom_override():
 
     assert tool.name == "custom_name"
     assert tool.description == "Custom description"
+
+
+def test_tool_decorator_and_json_schema():
+    from enum import Enum
+    from typing import Annotated, Literal, Optional
+    from pydantic import BaseModel
+    from agentu import tool, ToolPermission
+
+    class SortOrder(Enum):
+        ASC = "asc"
+        DESC = "desc"
+
+    class FilterSpec(BaseModel):
+        min_price: float
+        in_stock: bool = True
+
+    @tool(readonly=True)
+    def search_catalog(
+        query: Annotated[str, "Keywords to match"],
+        limit: int = 10,
+        category: Literal["laptop", "phone"] = "laptop",
+        order: SortOrder = SortOrder.ASC,
+        filters: Optional[FilterSpec] = None,
+    ) -> list[str]:
+        """Search product catalog.
+
+        Args:
+            limit: Maximum items to return
+        """
+        return [f"{query}:{limit}"]
+
+    assert search_catalog.name == "search_catalog"
+    assert search_catalog.permission == ToolPermission.READONLY
+    # Directly callable!
+    assert search_catalog("macbook", limit=3) == ["macbook:3"]
+
+    openai_def = search_catalog.to_openai_tool()
+    assert openai_def["type"] == "function"
+    fn = openai_def["function"]
+    assert fn["name"] == "search_catalog"
+    schema = fn["parameters"]
+    assert schema["type"] == "object"
+    assert schema["required"] == ["query"]
+    assert schema["properties"]["query"] == {"type": "string", "description": "Keywords to match"}
+    assert schema["properties"]["limit"]["type"] == "integer"
+    assert schema["properties"]["limit"]["description"] == "Maximum items to return"
+    assert schema["properties"]["limit"]["default"] == 10
+    assert schema["properties"]["category"]["enum"] == ["laptop", "phone"]
+    assert schema["properties"]["order"]["enum"] == ["asc", "desc"]
+    assert "properties" in schema["properties"]["filters"]
+
+
+def test_bare_tool_decorator():
+    from agentu import tool, ToolPermission
+
+    @tool
+    def ping() -> str:
+        """Health check."""
+        return "pong"
+
+    assert ping.permission == ToolPermission.WRITE
+    assert ping() == "pong"

@@ -2,7 +2,7 @@ import json
 import asyncio
 import aiohttp
 import hashlib
-from typing import AsyncIterator, List, Dict, Any, Optional, Callable, Type, Union
+from typing import AsyncIterator, List, Dict, Any, Optional, Callable, Type, TypeVar, Union, overload
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -13,9 +13,16 @@ from .structured import (
     format_validation_error,
     StructuredOutputError,
 )
-from ..drivers.base import BaseDriver
+from ..drivers import (
+    BaseDriver,
+    get_driver_for_model,
+    is_auto_routed_model,
+    detect_env_default_model,
+)
 from .agent_transport import TransportMixin
 from .result import InferResult
+
+_T = TypeVar("_T")
 
 from .tools import Tool, ToolPermission
 from .safety import check_lethal_trifecta, spotlight_untrusted
@@ -105,12 +112,15 @@ def _get_ollama_models_sync(api_base: str = "http://localhost:11434") -> List[st
         import urllib.request
         import json as _json
         req = urllib.request.Request(f"{api_base.rstrip('/')}/api/tags")
-        with urllib.request.urlopen(req, timeout=2) as resp:
+        with urllib.request.urlopen(req, timeout=0.25) as resp:
             models_data = _json.loads(resp.read())
             return [model["name"] for model in models_data.get("models", [])]
     except Exception as e:
-        logger.warning(f"Unable to fetch Ollama models: {e}")
+        logger.debug(f"Unable to fetch Ollama models: {e}")
         return []
+
+
+_ORIG_GET_OLLAMA_MODELS_SYNC = _get_ollama_models_sync
 
 
 def get_default_model(api_base: str = "http://localhost:11434") -> str:
@@ -127,7 +137,7 @@ def get_default_model(api_base: str = "http://localhost:11434") -> str:
         logger.info(f"Available Ollama models: {models}")
         logger.info(f"Using default model: {models[0]}")
         return models[0]
-    logger.warning("No Ollama models found, using 'qwen3:latest' as fallback")
+    logger.debug("No Ollama models found, using 'qwen3:latest' as fallback")
     return "qwen3:latest"
 
 
@@ -144,7 +154,7 @@ class Agent(TransportMixin, MemoryMixin, SandboxMixin, HooksMixin, ContextMixin,
                  mcp_config_path: Optional[str] = None, load_mcp_tools: bool = False,
                  enable_memory: bool = True, memory_path: Optional[str] = None,
                  short_term_size: int = 10, use_sqlite: bool = True,
-                 priority: int = 5, api_base: str = "http://localhost:11434/v1",
+                 priority: int = 5, api_base: Optional[str] = None,
                  api_key: Optional[str] = None, max_turns: int = 10,
                  cache: bool = False, cache_ttl: int = 3600,
                  enable_rationale_recording: bool = False,
@@ -156,7 +166,9 @@ class Agent(TransportMixin, MemoryMixin, SandboxMixin, HooksMixin, ContextMixin,
 
         Args:
             name: Name of the agent
-            model: Model name to use (default: auto-detect from Ollama, fallback to qwen3:latest)
+            model: Model identifier — e.g. 'gemini-2.5-flash', 'claude-sonnet-4-20250514',
+                   'gpt-4o', 'openai/gpt-4o', 'groq/llama-3.3-70b-versatile', 'ollama/qwen3:latest'.
+                   When omitted, auto-detects from API key env vars or local Ollama.
             temperature: Temperature for model generation (default: 0.7)
             mcp_config_path: Optional path to MCP configuration file
             load_mcp_tools: Whether to automatically load tools from MCP servers (default: False)
@@ -165,8 +177,8 @@ class Agent(TransportMixin, MemoryMixin, SandboxMixin, HooksMixin, ContextMixin,
             short_term_size: Size of short-term memory buffer (default: 10)
             use_sqlite: If True, use SQLite database for memory; otherwise use JSON (default: True)
             priority: Agent priority for task assignment (default: 5)
-            api_base: Base URL for OpenAI-compatible API (default: http://localhost:11434/v1 for Ollama)
-            api_key: Optional API key for authentication
+            api_base: Custom API base URL (auto-resolved per provider; defaults to http://localhost:11434/v1 for local)
+            api_key: Optional API key for authentication (falls back to provider env vars)
             max_turns: Maximum turns for multi-turn inference (default: 10)
             cache: Enable LLM response caching (default: False)
             cache_ttl: Cache time-to-live in seconds (default: 3600 = 1 hour)
@@ -181,22 +193,69 @@ class Agent(TransportMixin, MemoryMixin, SandboxMixin, HooksMixin, ContextMixin,
             rules_dir: Directory to start rule discovery from (default: current working
                        directory). Only used when auto_discover_rules is True.
             driver: Optional provider driver. When supplied, all LLM calls and streams
-                    use it instead of the built-in OpenAI-compatible transport.
+                    use it instead of auto-routing.
         """
         self.name = name
         self.codemode = codemode
+
+        default_local_base = "http://localhost:11434/v1"
+        explicit_base = api_base.rstrip("/") if api_base else None
+
+        # Auto-wire native provider driver when appropriate
+        auto_ollama_model: Optional[str] = None
+        if driver is None:
+            m_lower = (model or "").lower()
+            has_native_prefix = m_lower.startswith(("gemini/", "google/", "claude/", "anthropic/", "ollama/"))
+            if model is not None and is_auto_routed_model(model) and (explicit_base is None or has_native_prefix):
+                driver = get_driver_for_model(
+                    model=model,
+                    api_base=explicit_base,
+                    api_key=api_key,
+                    temperature=temperature,
+                )
+            elif (
+                model is None
+                and explicit_base is None
+                and _get_ollama_models_sync is _ORIG_GET_OLLAMA_MODELS_SYNC
+            ):
+                import os as _os
+                explicit_env_model = _os.environ.get("AGENTU_MODEL")
+                if explicit_env_model:
+                    driver = get_driver_for_model(
+                        model=explicit_env_model,
+                        api_key=api_key,
+                        temperature=temperature,
+                    )
+                else:
+                    local_models = _get_ollama_models_sync("http://localhost:11434")
+                    if local_models:
+                        auto_ollama_model = local_models[0]
+                    else:
+                        env_model = detect_env_default_model()
+                        if env_model is not None:
+                            driver = get_driver_for_model(
+                                model=env_model,
+                                api_key=api_key,
+                                temperature=temperature,
+                            )
+
         self.driver = driver
-        self.api_base = (driver.api_base or api_base).rstrip('/') if driver else api_base.rstrip('/')
-        self.api_key = driver.api_key if driver else api_key
+        self.api_base = (
+            (driver.api_base or explicit_base or default_local_base).rstrip("/")
+            if driver is not None
+            else (explicit_base or default_local_base)
+        )
+        self.api_key = driver.api_key if driver is not None else api_key
 
         # Auto-detect model if not specified
         if driver is not None:
-            if model is not None:
+            if model is not None and "/" not in model:
                 driver.model = model
             self.model = driver.model or model or "qwen3:latest"
+        elif auto_ollama_model is not None:
+            self.model = auto_ollama_model
         elif model is None:
-            # Extract base URL without /v1 suffix for Ollama API
-            ollama_base = self.api_base.replace('/v1', '')
+            ollama_base = self.api_base.replace("/v1", "")
             self.model = get_default_model(ollama_base)
         else:
             self.model = model
@@ -896,7 +955,9 @@ class Agent(TransportMixin, MemoryMixin, SandboxMixin, HooksMixin, ContextMixin,
         await self.mcp_manager.close_all()
 
     async def close(self):
-        """Close all async resources (LLM session, MCP connections)."""
+        """Close all async resources (driver session, LLM session, MCP connections)."""
+        if self.driver is not None:
+            await self.driver.close()
         if self._llm_session and not self._llm_session.closed:
             await self._llm_session.close()
             self._llm_session = None
@@ -1668,51 +1729,56 @@ User request: {user_input}"""
 
 User Input: {user_input}
 
-You are an AI assistant that helps determine which tool to use and how to use it.
-Analyze the user input and available tools to determine the appropriate action.
+You are an AI assistant deciding whether to call an available tool or answer directly.
+Respond with valid JSON in ONE of these two formats:
 
-Your response must be valid JSON in this exact format:
+1) To call a tool:
 {{
     "selected_tool": "name_of_tool",
     "parameters": {{
-        "param1": "value1",
-        "param2": "value2"
+        "param1": "value1"
     }},
-    "reasoning": "Your explanation here"
+    "reasoning": "Brief explanation"
 }}
 
-For the calculator tool, ensure numeric parameters are numbers, not strings.
-Remember to match the parameter names exactly as specified in the tool description.
-
-Example response for calculator:
+2) When the task is complete or no tool is needed, reply directly:
 {{
-    "selected_tool": "calculator",
-    "parameters": {{
-        "x": 5,
-        "y": 3,
-        "operation": "multiply"
-    }},
-    "reasoning": "User wants to multiply 5 and 3"
-}}"""
+    "text_response": "Your final answer to the user",
+    "selected_tool": null,
+    "parameters": {{}}
+}}
 
+Ensure parameter types (numbers, booleans, arrays) and names match the tool definition exactly."""
+
+        raw_response = ""
         try:
-            response = await self._call_llm(prompt, images=images, media=media)
-            # Strip markdown code fences if present
-            cleaned = response.strip()
+            raw_response = await self._call_llm(prompt, images=images, media=media)
+            cleaned = raw_response.strip()
             if cleaned.startswith("```"):
-                # Remove opening fence (with optional language tag)
                 cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
             cleaned = cleaned.strip()
-            # Try to find JSON object if there's extra text around it
             if not cleaned.startswith("{"):
                 start = cleaned.find("{")
                 end = cleaned.rfind("}") + 1
                 if start != -1 and end > start:
                     cleaned = cleaned[start:end]
+                elif cleaned:
+                    return {
+                        "text_response": cleaned,
+                        "selected_tool": None,
+                        "parameters": {},
+                    }
             return json.loads(cleaned)
         except (json.JSONDecodeError, Exception) as e:
+            stripped = raw_response.strip()
+            if stripped and not stripped.startswith(("{", "[")):
+                return {
+                    "text_response": stripped,
+                    "selected_tool": None,
+                    "parameters": {},
+                }
             logger.error(f"Error parsing LLM response: {str(e)}")
             return {
                 "selected_tool": None,
@@ -1939,6 +2005,27 @@ Example response for calculator:
         else:
             return asyncio.run(_embed_and_rank())
 
+    @overload
+    async def infer(
+        self,
+        user_input: str,
+        output_schema: None = None,
+        *,
+        output_type: Type[_T],
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> InferResult[_T]: ...
+
+    @overload
+    async def infer(
+        self,
+        user_input: str,
+        output_schema: Optional[Type] = None,
+        output_type: None = None,
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> InferResult[Any]: ...
+
     async def infer(
         self,
         user_input: str,
@@ -1946,27 +2033,15 @@ Example response for calculator:
         output_type: Optional[Type] = None,
         images: Optional[List[str]] = None,
         media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-    ) -> Dict[str, Any]:
-        """Infer tool and parameters from natural language input.
+    ) -> InferResult[Any]:
+        """Infer response, execute tools, and/or validate structured output from natural language.
 
         Runs a multi-turn agentic loop:
-        1. LLM evaluates which tool to use
-        2. If search_tools called, activate found tools and continue
-        3. If regular tool called, execute and check if more work needed
-        4. If no tool selected (text response), return final result
-
-        When codemode is enabled on the agent, the LLM writes Python code
-        that calls tools via a typed API instead of making individual
-        JSON tool calls.
-
-        When output_schema is set and no tools are registered, runs a
-        direct structured LLM call instead of the agentic tool loop.
-
-        When output_type is set, the LLM output is validated against the
-        given Pydantic BaseModel class and retried on validation failure
-        (up to max_corrections times). Returns a validated Pydantic
-        instance in the 'structured' key. Mutually exclusive with
-        output_schema.
+        1. Uses native provider tool-calling when a driver is active (or JSON fallback)
+        2. If search_tools is called, activates matching deferred tools and continues
+        3. Executes single or parallel tool calls (in-process or subprocess sandbox)
+        4. When tools are combined with output_type/output_schema, synthesizes a
+           validated structured output from the gathered tool results
 
         Args:
             user_input: Natural language query
@@ -1978,9 +2053,7 @@ Example response for calculator:
             media: Optional list of media sources (images, audios, videos, or explicit dicts)
 
         Returns:
-            Dict with tool_used, parameters, reasoning, and result.
-            When output_schema or output_type is set, includes 'structured'
-            key with validated instance.
+            InferResult[T] (dict-compatible) with .text, .data, .tool_calls, .history, and .turns.
 
         Raises:
             ValueError: If both output_schema and output_type are provided.
@@ -2019,6 +2092,265 @@ Example response for calculator:
             if worktree_manager:
                 await worktree_manager.remove()
 
+    @overload
+    def run(
+        self,
+        user_input: str,
+        output_schema: None = None,
+        *,
+        output_type: Type[_T],
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> InferResult[_T]: ...
+
+    @overload
+    def run(
+        self,
+        user_input: str,
+        output_schema: Optional[Type] = None,
+        output_type: None = None,
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> InferResult[Any]: ...
+
+    def run(
+        self,
+        user_input: str,
+        output_schema: Optional[Type] = None,
+        output_type: Optional[Type] = None,
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> InferResult[Any]:
+        """Synchronous convenience wrapper around infer() for scripts and REPLs."""
+        async def _runner() -> InferResult[Any]:
+            try:
+                return await self.infer(
+                    user_input,
+                    output_schema=output_schema,
+                    output_type=output_type,
+                    images=images,
+                    media=media,
+                )
+            finally:
+                if self.driver is not None:
+                    await self.driver.close()
+                if self._llm_session and not self._llm_session.closed:
+                    await self._llm_session.close()
+                    self._llm_session = None
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_runner())
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, _runner()).result()
+
+    async def _synthesize_structured_from_tools(
+        self,
+        user_input: str,
+        tool_summary: str,
+        turn_history: List[Dict[str, Any]],
+        output_schema: Optional[Type],
+        output_type: Optional[Type],
+    ) -> InferResult[Any]:
+        """Synthesize a validated structured output using results gathered by tools."""
+        synthesis_prompt = (
+            f"{f'Context: {self.context}' + chr(10) + chr(10) if self.context else ''}"
+            f"Original user request:\n{user_input}\n\n"
+            f"Tool execution results:\n{tool_summary}\n\n"
+            f"Produce the final structured response grounded in the tool results above."
+        )
+        if output_type is not None:
+            res = await self._structured_output_with_retries(synthesis_prompt, output_type)
+            # Replace synthetic history entry added by _structured_output_with_retries
+            if self.conversation_history and self.conversation_history[-1].get("user_input") == synthesis_prompt:
+                self.conversation_history.pop()
+        else:
+            raw = await self._call_llm(synthesis_prompt, output_schema=output_schema)
+            validated = parse_and_validate(raw, output_schema)
+            res = InferResult(text=raw, result=raw, structured=validated, turns=1)
+
+        res.history = list(turn_history)
+        res.tool_calls = list(turn_history)
+        res.turns = len(turn_history) + res.turns
+        if turn_history:
+            res["tool_used"] = turn_history[-1].get("tool_used")
+        return res
+
+    async def _run_native_driver_tool_loop(
+        self,
+        user_input: str,
+        active_skills: List[Skill],
+        images: Optional[List[str]] = None,
+        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    ) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Execute multi-turn native function-calling via self.driver."""
+        assert self.driver is not None
+
+        if self._input_guardrails:
+            self._input_guardrails.check_or_raise(user_input, direction="input")
+
+        system_parts: List[str] = []
+        if self.context:
+            system_parts.append(self.context)
+        if active_skills:
+            system_parts.append("=== Active Skills ===")
+            for skill in active_skills:
+                system_parts.append(f"\n## Skill: {skill.name}")
+                system_parts.append(skill.load_instructions())
+            system_parts.append("=== End Skills ===")
+
+        messages: List[Dict[str, Any]] = []
+        if system_parts:
+            messages.append({"role": "system", "content": "\n".join(system_parts)})
+        user_msgs = await self._build_messages(user_input, images=images, media=media)
+        messages.extend(user_msgs)
+
+        turn_history: List[Dict[str, Any]] = []
+        final_response: Optional[Dict[str, Any]] = None
+        retryable_statuses = {429, 500, 502, 503, 504}
+
+        for turn in range(self.max_turns):
+            openai_tools = [t.to_openai_tool() for t in self.tools]
+
+            with self.observer.trace(
+                EventType.LLM_REQUEST,
+                {"model": self.model, "prompt_length": len(user_input), "native_tools": len(openai_tools)},
+            ):
+                driver_resp = None
+                for attempt in range(3):
+                    try:
+                        driver_resp = await self.driver.call(messages, tools=openai_tools)
+                        break
+                    except aiohttp.ClientError as exc:
+                        if (
+                            isinstance(exc, aiohttp.ClientResponseError)
+                            and exc.status not in retryable_statuses
+                        ) or attempt == 2:
+                            raise
+                        await asyncio.sleep(2 ** attempt)
+
+            assert driver_resp is not None
+
+            if not driver_resp.tool_calls:
+                final_text = driver_resp.text or ""
+                if self._output_guardrails and final_text:
+                    for correction in range(self._max_corrections + 1):
+                        failures = self._output_guardrails.check(final_text)
+                        if not failures:
+                            break
+                        if correction == self._max_corrections:
+                            self._output_guardrails.check_or_raise(final_text, direction="output")
+                        violation_feedback = "\n".join(f"- {f.reason}" for f in failures)
+                        self.observer.record(EventType.SELF_CORRECTION, {
+                            "attempt": correction + 1,
+                            "max_attempts": self._max_corrections,
+                            "violations": [f.reason for f in failures],
+                        })
+                        messages.append({"role": "assistant", "content": final_text})
+                        messages.append({
+                            "role": "user",
+                            "content": f"Your previous response was rejected:\n{violation_feedback}\nRegenerate avoiding these violations.",
+                        })
+                        retry_resp = await self.driver.call(messages)
+                        final_text = retry_resp.text or ""
+
+                if final_text:
+                    final_response = {
+                        "text_response": final_text,
+                        "history": turn_history,
+                    }
+                    if turn_history:
+                        final_response["tool_used"] = turn_history[-1].get("tool_used")
+                        final_response["result"] = turn_history[-1].get("result")
+                elif turn_history:
+                    final_response = dict(turn_history[-1])
+                    final_response["history"] = turn_history
+                else:
+                    final_response = {"error": "Empty response from model"}
+                break
+
+            parsed_calls: List[tuple[str, str, Dict[str, Any]]] = []
+            for idx, tc in enumerate(driver_resp.tool_calls):
+                call_id = tc.get("id") or f"call_{turn}_{idx}"
+                fn_info = tc.get("function", {})
+                t_name = fn_info.get("name", "")
+                raw_args = fn_info.get("arguments", {})
+                if isinstance(raw_args, str):
+                    try:
+                        t_params = json.loads(raw_args) if raw_args.strip() else {}
+                    except json.JSONDecodeError:
+                        t_params = {}
+                elif isinstance(raw_args, dict):
+                    t_params = raw_args
+                else:
+                    t_params = {}
+                parsed_calls.append((call_id, t_name, t_params))
+
+            # Write-ahead checkpoint before executing tools
+            session = self._active_session
+            if session and getattr(session, "auto_checkpoint", False) and parsed_calls:
+                first_id, first_name, first_params = parsed_calls[0]
+                pending_state = {
+                    "user_input": user_input,
+                    "turn": turn + 1,
+                    "completed_turns": list(turn_history),
+                    "pending_tool": first_name,
+                    "pending_parameters": first_params,
+                    "additional_tools": [
+                        {"tool": n, "parameters": p} for _, n, p in parsed_calls[1:]
+                    ],
+                }
+                session.checkpoint(
+                    store=getattr(session, "_checkpoint_store", None),
+                    pending_tool_calls=pending_state,
+                )
+
+            messages.append({
+                "role": "assistant",
+                "content": driver_resp.text or "",
+                "tool_calls": driver_resp.tool_calls,
+            })
+
+            async def _exec_one(c_id: str, name: str, params: Dict[str, Any]):
+                try:
+                    res = await self.call(name, params)
+                    return c_id, name, params, res, None
+                except Exception as exc:
+                    return c_id, name, params, None, str(exc)
+
+            if len(parsed_calls) > 1:
+                call_outcomes = await asyncio.gather(
+                    *(_exec_one(cid, n, p) for cid, n, p in parsed_calls)
+                )
+            else:
+                cid, n, p = parsed_calls[0]
+                call_outcomes = [await _exec_one(cid, n, p)]
+
+            for c_id, t_name, t_params, t_result, t_error in call_outcomes:
+                effective_result = t_result if t_error is None else f"Error: {t_error}"
+                turn_history.append({
+                    "turn": turn + 1,
+                    "tool_used": t_name,
+                    "parameters": t_params,
+                    "reasoning": driver_resp.text or "",
+                    "result": effective_result,
+                })
+                serialized = (
+                    effective_result
+                    if isinstance(effective_result, str)
+                    else json.dumps(effective_result, default=str)
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": c_id,
+                    "name": t_name,
+                    "content": serialized,
+                })
+
+        return final_response, turn_history
+
     async def _infer_inner(
         self,
         user_input: str,
@@ -2026,7 +2358,7 @@ Example response for calculator:
         output_type: Optional[Type] = None,
         images: Optional[List[str]] = None,
         media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-    ) -> Dict[str, Any]:
+    ) -> InferResult[Any]:
         """Inner inference logic, separated for worktree wrapping."""
 
         # Load deferred MCP tools on first inference
@@ -2070,6 +2402,56 @@ Example response for calculator:
                 metadata={'role': 'user'},
                 importance=0.5
             )
+
+        # ===== DIRECT CONVERSATIONAL PATH (zero tools registered) =====
+        if (
+            not self.tools
+            and not self.deferred_tools
+            and "evaluate_tool_use" not in self.__dict__
+        ):
+            active_skills = self._match_skills(user_input)
+            turn_prompt = self._build_turn_context(user_input, [], active_skills)
+            if self.context:
+                turn_prompt = f"Context: {self.context}\n\n{turn_prompt}"
+            raw_reply = await self._call_llm(turn_prompt, images=images, media=media)
+            reply_text = raw_reply
+            stripped_reply = raw_reply.strip()
+            if stripped_reply.startswith("{") and "text_response" in stripped_reply:
+                try:
+                    parsed_obj = json.loads(stripped_reply)
+                    if isinstance(parsed_obj, dict) and isinstance(parsed_obj.get("text_response"), str):
+                        reply_text = parsed_obj["text_response"]
+                except json.JSONDecodeError:
+                    pass
+
+            conv_response: Dict[str, Any] = {
+                "text_response": reply_text,
+                "result": reply_text,
+                "history": [],
+            }
+            if self._hooks and self._hooks.on_stop_hooks:
+                conv_response = await self._hooks.run_on_stop(conv_response)
+
+            if self.memory_enabled:
+                await asyncio.to_thread(
+                    self.memory.remember,
+                    content=f"Agent: {conv_response.get('text_response', reply_text)}",
+                    memory_type="conversation",
+                    metadata={"role": "agent"},
+                    importance=0.6,
+                )
+
+            conv_result = InferResult.from_response(conv_response, turns=1, history=[])
+            self.conversation_history.append({
+                "user_input": user_input,
+                "response": conv_result,
+                "turns": 1,
+            })
+            self.observer.record(
+                EventType.INFERENCE_END,
+                {"query": user_input, "turns": 1, "tool_used": None},
+            )
+            return conv_result
 
         # ===== CODEMODE PATH =====
         if self.codemode and self.tools:
@@ -2139,9 +2521,32 @@ Example response for calculator:
                     importance=0.6
                 )
 
+            if output_type is not None or output_schema is not None:
+                codemode_history = [{
+                    "turn": 1,
+                    "tool_used": "codemode",
+                    "parameters": {"code": last_code},
+                    "result": exec_result,
+                }]
+                structured_res = await self._synthesize_structured_from_tools(
+                    user_input, str(exec_result), codemode_history, output_schema, output_type,
+                )
+                structured_res["codemode"] = True
+                self.conversation_history.append({
+                    "user_input": user_input,
+                    "response": structured_res,
+                    "turns": structured_res.turns,
+                })
+                self.observer.record(
+                    EventType.INFERENCE_END,
+                    {"query": user_input, "turns": structured_res.turns, "codemode": True, "structured": True},
+                )
+                return structured_res
+
+            wrapped_codemode = InferResult.from_response(final_response, turns=attempt + 1)
             self.conversation_history.append({
                 "user_input": user_input,
-                "response": final_response,
+                "response": wrapped_codemode,
                 "turns": attempt + 1,
             })
 
@@ -2150,123 +2555,128 @@ Example response for calculator:
                 {"query": user_input, "turns": attempt + 1, "codemode": True}
             )
 
-            return final_response
+            return wrapped_codemode
 
-        # ===== TRADITIONAL TOOL-CALLING PATH =====
+        # ===== TOOL-CALLING PATH (Native Driver or JSON Fallback) =====
 
         # Auto-match skills based on user input (Level 2 activation)
         active_skills = self._match_skills(user_input)
         if active_skills:
             logger.info(f"Activated {len(active_skills)} skill(s): {[s.name for s in active_skills]}")
 
-        turn_history = []
-        final_response = None
+        use_native_driver_tools = (
+            self.driver is not None
+            and bool(self.tools)
+            and "evaluate_tool_use" not in self.__dict__
+            and "_call_llm" not in self.__dict__
+            and "_raw_llm_call" not in self.__dict__
+            and self._middleware_chain is None
+            and not self.cache_enabled
+        )
 
-        for turn in range(self.max_turns):
-            # Build context from previous turns (includes skill instructions if active)
-            context = self._build_turn_context(user_input, turn_history, active_skills)
+        if use_native_driver_tools:
+            final_response, turn_history = await self._run_native_driver_tool_loop(
+                user_input, active_skills, images=images, media=media,
+            )
+        else:
+            turn_history = []
+            final_response = None
 
-            if images or media:
-                try:
-                    evaluation = await self.evaluate_tool_use(context, images=images, media=media)
-                except TypeError:
-                    evaluation = await self.evaluate_tool_use(context)
-            else:
-                evaluation = await self.evaluate_tool_use(context)
+            for turn in range(self.max_turns):
+                # Build context from previous turns (includes skill instructions if active)
+                context = self._build_turn_context(user_input, turn_history, active_skills)
 
-            # Check for text_response (model is done, no more tool calls)
-            if evaluation.get("text_response"):
-                final_response = {
-                    "text_response": evaluation["text_response"],
-                    "history": turn_history,
-                }
-                break
-
-            if not evaluation.get("selected_tool"):
-                # No tool selected = task complete or no match
-                if turn_history:
-                    final_response = turn_history[-1]
-                else:
-                    final_response = {"error": "No appropriate tool found"}
-                break
-
-            tool_name = evaluation["selected_tool"]
-            parameters = evaluation["parameters"]
-
-            # ── Write-ahead checkpoint ──────────────────────────
-            # Save state BEFORE tool execution so mid-call crashes
-            # can be recovered.  The checkpoint includes completed
-            # turns and the tool about to be executed.
-            session = self._active_session
-            if session and getattr(session, 'auto_checkpoint', False):
-                pending_state = {
-                    "user_input": user_input,
-                    "turn": turn + 1,
-                    "completed_turns": list(turn_history),
-                    "pending_tool": tool_name,
-                    "pending_parameters": parameters,
-                    "additional_tools": evaluation.get("additional_tools", []),
-                }
-                session.checkpoint(
-                    store=getattr(session, '_checkpoint_store', None),
-                    pending_tool_calls=pending_state,
-                )
-
-            # Execute the tool call(s)
-            # Support parallel tool calls if the model returns additional_tools
-            additional_tools = evaluation.get("additional_tools", [])
-            if additional_tools:
-                # Parallel execution with asyncio.gather
-                async def _safe_call(name, params):
+                if images or media:
                     try:
-                        return name, params, await self.call(name, params), None
+                        evaluation = await self.evaluate_tool_use(context, images=images, media=media)
+                    except TypeError:
+                        evaluation = await self.evaluate_tool_use(context)
+                else:
+                    evaluation = await self.evaluate_tool_use(context)
+
+                # Check for text_response (model is done, no more tool calls)
+                if evaluation.get("text_response"):
+                    final_response = {
+                        "text_response": evaluation["text_response"],
+                        "history": turn_history,
+                    }
+                    break
+
+                if not evaluation.get("selected_tool"):
+                    # No tool selected = task complete or no match
+                    if turn_history:
+                        final_response = turn_history[-1]
+                    else:
+                        final_response = {"error": "No appropriate tool found"}
+                    break
+
+                tool_name = evaluation["selected_tool"]
+                parameters = evaluation["parameters"]
+
+                # ── Write-ahead checkpoint ──────────────────────────
+                session = self._active_session
+                if session and getattr(session, 'auto_checkpoint', False):
+                    pending_state = {
+                        "user_input": user_input,
+                        "turn": turn + 1,
+                        "completed_turns": list(turn_history),
+                        "pending_tool": tool_name,
+                        "pending_parameters": parameters,
+                        "additional_tools": evaluation.get("additional_tools", []),
+                    }
+                    session.checkpoint(
+                        store=getattr(session, '_checkpoint_store', None),
+                        pending_tool_calls=pending_state,
+                    )
+
+                # Execute the tool call(s)
+                additional_tools = evaluation.get("additional_tools", [])
+                if additional_tools:
+                    async def _safe_call(name, params):
+                        try:
+                            return name, params, await self.call(name, params), None
+                        except Exception as e:
+                            return name, params, None, str(e)
+
+                    tasks = [_safe_call(tool_name, parameters)]
+                    for extra in additional_tools:
+                        tasks.append(_safe_call(extra["tool"], extra.get("parameters", {})))
+
+                    results = await asyncio.gather(*tasks)
+
+                    for t_name, t_params, t_result, t_error in results:
+                        turn_result = {
+                            "turn": turn + 1,
+                            "tool_used": t_name,
+                            "parameters": t_params,
+                            "reasoning": evaluation.get("reasoning", ""),
+                            "result": t_result if t_error is None else f"Error: {t_error}",
+                        }
+                        turn_history.append(turn_result)
+                else:
+                    try:
+                        result = await self.call(tool_name, parameters)
                     except Exception as e:
-                        return name, params, None, str(e)
+                        result = f"Error: {str(e)}"
 
-                tasks = [_safe_call(tool_name, parameters)]
-                for extra in additional_tools:
-                    tasks.append(_safe_call(extra["tool"], extra.get("parameters", {})))
-
-                results = await asyncio.gather(*tasks)
-
-                for t_name, t_params, t_result, t_error in results:
                     turn_result = {
                         "turn": turn + 1,
-                        "tool_used": t_name,
-                        "parameters": t_params,
+                        "tool_used": tool_name,
+                        "parameters": parameters,
                         "reasoning": evaluation.get("reasoning", ""),
-                        "result": t_result if t_error is None else f"Error: {t_error}",
+                        "result": result
                     }
                     turn_history.append(turn_result)
-            else:
-                # Single tool call (most common path)
-                try:
-                    result = await self.call(tool_name, parameters)
-                except Exception as e:
-                    result = f"Error: {str(e)}"
 
-                turn_result = {
-                    "turn": turn + 1,
-                    "tool_used": tool_name,
-                    "parameters": parameters,
-                    "reasoning": evaluation.get("reasoning", ""),
-                    "result": result
-                }
-                turn_history.append(turn_result)
-
-            # search_tools is always a continuation signal
-            if tool_name == "search_tools":
-                continue
-
-            # Multi-turn: continue looping — the model decides when to stop
-            # by returning no tool or a text_response
+                # search_tools is always a continuation signal
+                if tool_name == "search_tools":
+                    continue
 
         if final_response is None:
             final_response = {
                 "error": f"Max turns ({self.max_turns}) reached",
                 "history": turn_history,
             }
-            # Include last turn result if available
             if turn_history:
                 final_response["tool_used"] = turn_history[-1].get("tool_used")
                 final_response["result"] = turn_history[-1].get("result")
@@ -2285,9 +2695,53 @@ Example response for calculator:
                 importance=0.6
             )
 
+        # If structured output was requested alongside tools, synthesize & validate now
+        if (output_type is not None or output_schema is not None) and "error" not in final_response:
+            summary_lines = [
+                f"- {t['tool_used']}({t['parameters']}) -> {t['result']}"
+                for t in turn_history
+            ]
+            if final_response.get("text_response"):
+                summary_lines.append(f"Assistant notes: {final_response['text_response']}")
+            structured_res = await self._synthesize_structured_from_tools(
+                user_input,
+                "\n".join(summary_lines) or str(final_response),
+                turn_history,
+                output_schema,
+                output_type,
+            )
+            if self._hooks and self._hooks.on_stop_hooks:
+                hooked = await self._hooks.run_on_stop(structured_res)
+                structured_res = InferResult.from_response(hooked, turns=structured_res.turns, history=turn_history)
+            self.conversation_history.append({
+                "user_input": user_input,
+                "response": structured_res,
+                "turns": structured_res.turns,
+            })
+            self.observer.record(
+                EventType.INFERENCE_END,
+                {
+                    "query": user_input,
+                    "turns": structured_res.turns,
+                    "tool_used": structured_res.get("tool_used"),
+                    "structured": True,
+                },
+            )
+            return structured_res
+
+        # On-stop hooks
+        if self._hooks and self._hooks.on_stop_hooks:
+            final_response = await self._hooks.run_on_stop(final_response)
+
+        wrapped_final = InferResult.from_response(
+            final_response,
+            turns=max(1, len(turn_history)),
+            history=turn_history,
+        )
+
         self.conversation_history.append({
             "user_input": user_input,
-            "response": final_response,
+            "response": wrapped_final,
             "turns": len(turn_history)
         })
 
@@ -2318,15 +2772,11 @@ Example response for calculator:
             {
                 "query": user_input,
                 "turns": len(turn_history),
-                "tool_used": final_response.get('tool_used')
+                "tool_used": wrapped_final.get('tool_used')
             }
         )
 
-        # On-stop hooks
-        if self._hooks and self._hooks.on_stop_hooks:
-            final_response = await self._hooks.run_on_stop(final_response)
-
-        return final_response
+        return wrapped_final
 
     def _build_turn_context(self, user_input: str, turn_history: List[Dict[str, Any]], 
                             active_skills: Optional[List[Skill]] = None) -> str:
