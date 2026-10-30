@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 # ── Core value types (instant load, zero network/SDK imports) ────
 from ._core.result import InferResult
-from ._core.tools import Tool, ToolPermission, tool
+from ._core.tools import Tool, ToolPermission
 from ._core.hooks import HookAction, HookResult, HookSet, PermissionApprovalRequired
 
 if TYPE_CHECKING:
@@ -249,7 +249,7 @@ def __dir__():
 
 __all__ = [
     # Core
-    "Agent", "AgentConfig", "Tool", "ToolPermission", "tool",
+    "Agent", "AgentConfig", "Tool", "ToolPermission",
     "HookAction", "HookResult", "HookSet", "PermissionApprovalRequired",
     # Skills
     "Skill", "load_skill", "SkillLoader",

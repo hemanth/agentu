@@ -1,4 +1,4 @@
-"""Tests for DX, zero-config routing, native tool calling, tools+output_type, and packaging."""
+"""Tests for DX, zero-config routing, plain-function tools + output_type, and packaging."""
 
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -14,7 +14,6 @@ from agentu import (
     InferResult,
     OllamaDriver,
     OpenAIDriver,
-    tool,
 )
 
 
@@ -92,7 +91,7 @@ class TestZeroConfigRouting:
         assert agent.api_base == "http://my-litellm-proxy:4000/v1"
 
 
-class TestNativeToolCallingAndUnifiedInferResult:
+class TestUnifiedInferResultAndPlainTools:
     @pytest.mark.asyncio
     async def test_zero_tools_conversational_infer_works(self):
         agent = Agent("chat", model="test-model", enable_memory=False, auto_discover_rules=False)
@@ -105,56 +104,15 @@ class TestNativeToolCallingAndUnifiedInferResult:
         assert res.success is True
 
     @pytest.mark.asyncio
-    async def test_native_driver_multi_turn_tool_calling(self):
+    async def test_plain_function_tools_compose_with_output_type(self):
         driver = GeminiDriver(api_key="fake-key", model="gemini-2.5-flash")
         driver.call = AsyncMock(side_effect=[
             DriverResponse(
-                text="",
-                tool_calls=[{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "get_temp", "arguments": '{"city": "Tokyo"}'},
-                }],
-            ),
-            DriverResponse(
-                text="It is 72F and clear in Tokyo.",
+                text='{"selected_tool": "lookup_weather", "parameters": {"city": "Paris"}, "reasoning": "Need Paris weather"}',
                 tool_calls=[],
             ),
-        ])
-
-        @tool(readonly=True)
-        def get_temp(city: str) -> str:
-            """Return current temperature."""
-            return f"72F in {city}"
-
-        agent = Agent("weather", driver=driver, enable_memory=False, auto_discover_rules=False).with_tools([get_temp])
-        res = await agent.infer("What's the weather in Tokyo?")
-
-        assert isinstance(res, InferResult)
-        assert res.text == "It is 72F and clear in Tokyo."
-        assert len(res.tool_calls) == 1
-        assert res.tool_calls[0]["tool_used"] == "get_temp"
-        assert res.tool_calls[0]["result"] == "72F in Tokyo"
-        assert "error" not in res
-
-        # Verify tool result was passed back as role='tool' on second call
-        second_call_messages = driver.call.call_args_list[1].args[0]
-        assert any(m.get("role") == "tool" and "72F in Tokyo" in m.get("content", "") for m in second_call_messages)
-
-    @pytest.mark.asyncio
-    async def test_tools_compose_with_output_type(self):
-        driver = GeminiDriver(api_key="fake-key", model="gemini-2.5-flash")
-        driver.call = AsyncMock(side_effect=[
             DriverResponse(
-                text="",
-                tool_calls=[{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
-                }],
-            ),
-            DriverResponse(
-                text="Fetched Paris weather.",
+                text='{"text_response": "Fetched Paris weather.", "selected_tool": null, "parameters": {}}',
                 tool_calls=[],
             ),
             DriverResponse(
@@ -163,7 +121,6 @@ class TestNativeToolCallingAndUnifiedInferResult:
             ),
         ])
 
-        @tool(readonly=True)
         def lookup_weather(city: str) -> dict:
             """Fetch weather metrics."""
             return {"city": city, "temp_f": 68, "condition": "Mild spring evening"}
@@ -178,13 +135,9 @@ class TestNativeToolCallingAndUnifiedInferResult:
         assert len(res.tool_calls) == 1
         assert res.tool_calls[0]["tool_used"] == "lookup_weather"
 
-    def test_sync_run_wrapper(self):
-        agent = Agent("sync-bot", model="test-model", enable_memory=False, auto_discover_rules=False)
-        agent._call_llm = AsyncMock(return_value="Sync works!")
-
-        res = agent.run("Ping")
-        assert isinstance(res, InferResult)
-        assert res.text == "Sync works!"
+    def test_no_unrequested_item3_exports(self):
+        assert not hasattr(agentu, "tool")
+        assert not hasattr(Agent, "run")
 
 
 class TestPackagingAndLazyExports:
@@ -205,7 +158,6 @@ class TestPackagingAndLazyExports:
 
     def test_core_dependencies_are_minimal(self):
         pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
-        # Core dependencies section should only require aiohttp and pydantic
         deps_block = pyproject.split("dependencies = [", 1)[1].split("]", 1)[0]
         assert "aiohttp" in deps_block
         assert "pydantic" in deps_block

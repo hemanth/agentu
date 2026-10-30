@@ -112,7 +112,6 @@ class MCPToolAdapter:
                     description=f"[MCP:{self.server_config.name}] {description}",
                     function=tool_function,
                     parameters=parameters,
-                    schema=input_schema or None,
                 )
 
                 tools.append(tool)

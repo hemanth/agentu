@@ -9,9 +9,8 @@ pip install agentu
 ## Quick start
 
 ```python
-from agentu import Agent, tool
+from agentu import Agent
 
-@tool(readonly=True)
 def search_products(query: str, max_price: int = 1500) -> list[dict]:
     """Search catalog for matching products."""
     return [
@@ -21,16 +20,15 @@ def search_products(query: str, max_price: int = 1500) -> list[dict]:
 
 agent = Agent("sales", model="gemini-2.5-flash").with_tools([search_products])
 
-# Synchronous script one-liner
-res = agent.run("Find me laptops under $1500")
-print(res.text)
+# Call a tool directly
+raw = await agent.call("search_products", {"query": "laptop"})
 
-# Or async inside your app:
-# res = await agent.infer("Find me laptops under $1500")
-# raw = await agent.call("search_products", {"query": "laptop"})
+# Or let the LLM run the multi-turn loop
+res = await agent.infer("Find me laptops under $1500")
+print(res.text)
 ```
 
-`run()` executes synchronously. `infer()` runs the async multi-turn agent loop and returns an `InferResult`. `call()` invokes a tool directly.
+`call()` invokes a tool directly. `infer()` runs the async multi-turn agentic loop and returns an `InferResult`.
 
 ## Zero-config providers
 
@@ -195,8 +193,7 @@ Attach OpenTelemetry GenAI spans via `.with_otel()` (`agentu[otel]`), score data
 
 ## Related
 
-- [Interactive Codelab](https://hemanth.github.io/agentu-codelab/) — guided hands-on walkthrough
-- [Playground & Architecture Blueprint](https://hemanth.github.io/agentu/) — live harness simulator
+- [Interactive Codelab](https://hemanth.github.io/agentu-codelab/) — interactive Python playground in your browser
 
 ## License
 

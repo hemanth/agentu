@@ -5,6 +5,12 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.1] - 2026-10-29
+
+### Removed
+
+- Removed `@tool`, sync `Agent.run()`, the dual-path native provider tool-calling loop, and the duplicate `docs/` simulator introduced in `2.10.0` — keeping `agentu` async-first (`await agent.infer()`), plain-function-based (`agent.with_tools([fn])` / `Tool(fn, ...)`), on a single unified harness pipeline (`evaluate_tool_use` + `codemode=True`), with a single interactive playground at `https://hemanth.github.io/agentu-codelab/`.
+
 ## [2.10.0] - 2026-10-29
 
 ### Added

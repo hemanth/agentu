@@ -2037,7 +2037,7 @@ Ensure parameter types (numbers, booleans, arrays) and names match the tool defi
         """Infer response, execute tools, and/or validate structured output from natural language.
 
         Runs a multi-turn agentic loop:
-        1. Uses native provider tool-calling when a driver is active (or JSON fallback)
+        1. LLM evaluates which tool to use (or writes Python in Code Mode)
         2. If search_tools is called, activates matching deferred tools and continues
         3. Executes single or parallel tool calls (in-process or subprocess sandbox)
         4. When tools are combined with output_type/output_schema, synthesizes a
@@ -2092,60 +2092,6 @@ Ensure parameter types (numbers, booleans, arrays) and names match the tool defi
             if worktree_manager:
                 await worktree_manager.remove()
 
-    @overload
-    def run(
-        self,
-        user_input: str,
-        output_schema: None = None,
-        *,
-        output_type: Type[_T],
-        images: Optional[List[str]] = None,
-        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-    ) -> InferResult[_T]: ...
-
-    @overload
-    def run(
-        self,
-        user_input: str,
-        output_schema: Optional[Type] = None,
-        output_type: None = None,
-        images: Optional[List[str]] = None,
-        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-    ) -> InferResult[Any]: ...
-
-    def run(
-        self,
-        user_input: str,
-        output_schema: Optional[Type] = None,
-        output_type: Optional[Type] = None,
-        images: Optional[List[str]] = None,
-        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-    ) -> InferResult[Any]:
-        """Synchronous convenience wrapper around infer() for scripts and REPLs."""
-        async def _runner() -> InferResult[Any]:
-            try:
-                return await self.infer(
-                    user_input,
-                    output_schema=output_schema,
-                    output_type=output_type,
-                    images=images,
-                    media=media,
-                )
-            finally:
-                if self.driver is not None:
-                    await self.driver.close()
-                if self._llm_session and not self._llm_session.closed:
-                    await self._llm_session.close()
-                    self._llm_session = None
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(_runner())
-
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, _runner()).result()
-
     async def _synthesize_structured_from_tools(
         self,
         user_input: str,
@@ -2177,179 +2123,6 @@ Ensure parameter types (numbers, booleans, arrays) and names match the tool defi
         if turn_history:
             res["tool_used"] = turn_history[-1].get("tool_used")
         return res
-
-    async def _run_native_driver_tool_loop(
-        self,
-        user_input: str,
-        active_skills: List[Skill],
-        images: Optional[List[str]] = None,
-        media: Optional[List[Union[str, Dict[str, Any]]]] = None,
-    ) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Execute multi-turn native function-calling via self.driver."""
-        assert self.driver is not None
-
-        if self._input_guardrails:
-            self._input_guardrails.check_or_raise(user_input, direction="input")
-
-        system_parts: List[str] = []
-        if self.context:
-            system_parts.append(self.context)
-        if active_skills:
-            system_parts.append("=== Active Skills ===")
-            for skill in active_skills:
-                system_parts.append(f"\n## Skill: {skill.name}")
-                system_parts.append(skill.load_instructions())
-            system_parts.append("=== End Skills ===")
-
-        messages: List[Dict[str, Any]] = []
-        if system_parts:
-            messages.append({"role": "system", "content": "\n".join(system_parts)})
-        user_msgs = await self._build_messages(user_input, images=images, media=media)
-        messages.extend(user_msgs)
-
-        turn_history: List[Dict[str, Any]] = []
-        final_response: Optional[Dict[str, Any]] = None
-        retryable_statuses = {429, 500, 502, 503, 504}
-
-        for turn in range(self.max_turns):
-            openai_tools = [t.to_openai_tool() for t in self.tools]
-
-            with self.observer.trace(
-                EventType.LLM_REQUEST,
-                {"model": self.model, "prompt_length": len(user_input), "native_tools": len(openai_tools)},
-            ):
-                driver_resp = None
-                for attempt in range(3):
-                    try:
-                        driver_resp = await self.driver.call(messages, tools=openai_tools)
-                        break
-                    except aiohttp.ClientError as exc:
-                        if (
-                            isinstance(exc, aiohttp.ClientResponseError)
-                            and exc.status not in retryable_statuses
-                        ) or attempt == 2:
-                            raise
-                        await asyncio.sleep(2 ** attempt)
-
-            assert driver_resp is not None
-
-            if not driver_resp.tool_calls:
-                final_text = driver_resp.text or ""
-                if self._output_guardrails and final_text:
-                    for correction in range(self._max_corrections + 1):
-                        failures = self._output_guardrails.check(final_text)
-                        if not failures:
-                            break
-                        if correction == self._max_corrections:
-                            self._output_guardrails.check_or_raise(final_text, direction="output")
-                        violation_feedback = "\n".join(f"- {f.reason}" for f in failures)
-                        self.observer.record(EventType.SELF_CORRECTION, {
-                            "attempt": correction + 1,
-                            "max_attempts": self._max_corrections,
-                            "violations": [f.reason for f in failures],
-                        })
-                        messages.append({"role": "assistant", "content": final_text})
-                        messages.append({
-                            "role": "user",
-                            "content": f"Your previous response was rejected:\n{violation_feedback}\nRegenerate avoiding these violations.",
-                        })
-                        retry_resp = await self.driver.call(messages)
-                        final_text = retry_resp.text or ""
-
-                if final_text:
-                    final_response = {
-                        "text_response": final_text,
-                        "history": turn_history,
-                    }
-                    if turn_history:
-                        final_response["tool_used"] = turn_history[-1].get("tool_used")
-                        final_response["result"] = turn_history[-1].get("result")
-                elif turn_history:
-                    final_response = dict(turn_history[-1])
-                    final_response["history"] = turn_history
-                else:
-                    final_response = {"error": "Empty response from model"}
-                break
-
-            parsed_calls: List[tuple[str, str, Dict[str, Any]]] = []
-            for idx, tc in enumerate(driver_resp.tool_calls):
-                call_id = tc.get("id") or f"call_{turn}_{idx}"
-                fn_info = tc.get("function", {})
-                t_name = fn_info.get("name", "")
-                raw_args = fn_info.get("arguments", {})
-                if isinstance(raw_args, str):
-                    try:
-                        t_params = json.loads(raw_args) if raw_args.strip() else {}
-                    except json.JSONDecodeError:
-                        t_params = {}
-                elif isinstance(raw_args, dict):
-                    t_params = raw_args
-                else:
-                    t_params = {}
-                parsed_calls.append((call_id, t_name, t_params))
-
-            # Write-ahead checkpoint before executing tools
-            session = self._active_session
-            if session and getattr(session, "auto_checkpoint", False) and parsed_calls:
-                first_id, first_name, first_params = parsed_calls[0]
-                pending_state = {
-                    "user_input": user_input,
-                    "turn": turn + 1,
-                    "completed_turns": list(turn_history),
-                    "pending_tool": first_name,
-                    "pending_parameters": first_params,
-                    "additional_tools": [
-                        {"tool": n, "parameters": p} for _, n, p in parsed_calls[1:]
-                    ],
-                }
-                session.checkpoint(
-                    store=getattr(session, "_checkpoint_store", None),
-                    pending_tool_calls=pending_state,
-                )
-
-            messages.append({
-                "role": "assistant",
-                "content": driver_resp.text or "",
-                "tool_calls": driver_resp.tool_calls,
-            })
-
-            async def _exec_one(c_id: str, name: str, params: Dict[str, Any]):
-                try:
-                    res = await self.call(name, params)
-                    return c_id, name, params, res, None
-                except Exception as exc:
-                    return c_id, name, params, None, str(exc)
-
-            if len(parsed_calls) > 1:
-                call_outcomes = await asyncio.gather(
-                    *(_exec_one(cid, n, p) for cid, n, p in parsed_calls)
-                )
-            else:
-                cid, n, p = parsed_calls[0]
-                call_outcomes = [await _exec_one(cid, n, p)]
-
-            for c_id, t_name, t_params, t_result, t_error in call_outcomes:
-                effective_result = t_result if t_error is None else f"Error: {t_error}"
-                turn_history.append({
-                    "turn": turn + 1,
-                    "tool_used": t_name,
-                    "parameters": t_params,
-                    "reasoning": driver_resp.text or "",
-                    "result": effective_result,
-                })
-                serialized = (
-                    effective_result
-                    if isinstance(effective_result, str)
-                    else json.dumps(effective_result, default=str)
-                )
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": c_id,
-                    "name": t_name,
-                    "content": serialized,
-                })
-
-        return final_response, turn_history
 
     async def _infer_inner(
         self,
@@ -2557,120 +2330,105 @@ Ensure parameter types (numbers, booleans, arrays) and names match the tool defi
 
             return wrapped_codemode
 
-        # ===== TOOL-CALLING PATH (Native Driver or JSON Fallback) =====
+        # ===== TRADITIONAL TOOL-CALLING PATH =====
 
         # Auto-match skills based on user input (Level 2 activation)
         active_skills = self._match_skills(user_input)
         if active_skills:
             logger.info(f"Activated {len(active_skills)} skill(s): {[s.name for s in active_skills]}")
 
-        use_native_driver_tools = (
-            self.driver is not None
-            and bool(self.tools)
-            and "evaluate_tool_use" not in self.__dict__
-            and "_call_llm" not in self.__dict__
-            and "_raw_llm_call" not in self.__dict__
-            and self._middleware_chain is None
-            and not self.cache_enabled
-        )
+        turn_history = []
+        final_response = None
 
-        if use_native_driver_tools:
-            final_response, turn_history = await self._run_native_driver_tool_loop(
-                user_input, active_skills, images=images, media=media,
-            )
-        else:
-            turn_history = []
-            final_response = None
+        for turn in range(self.max_turns):
+            # Build context from previous turns (includes skill instructions if active)
+            context = self._build_turn_context(user_input, turn_history, active_skills)
 
-            for turn in range(self.max_turns):
-                # Build context from previous turns (includes skill instructions if active)
-                context = self._build_turn_context(user_input, turn_history, active_skills)
-
-                if images or media:
-                    try:
-                        evaluation = await self.evaluate_tool_use(context, images=images, media=media)
-                    except TypeError:
-                        evaluation = await self.evaluate_tool_use(context)
-                else:
+            if images or media:
+                try:
+                    evaluation = await self.evaluate_tool_use(context, images=images, media=media)
+                except TypeError:
                     evaluation = await self.evaluate_tool_use(context)
+            else:
+                evaluation = await self.evaluate_tool_use(context)
 
-                # Check for text_response (model is done, no more tool calls)
-                if evaluation.get("text_response"):
-                    final_response = {
-                        "text_response": evaluation["text_response"],
-                        "history": turn_history,
-                    }
-                    break
+            # Check for text_response (model is done, no more tool calls)
+            if evaluation.get("text_response"):
+                final_response = {
+                    "text_response": evaluation["text_response"],
+                    "history": turn_history,
+                }
+                break
 
-                if not evaluation.get("selected_tool"):
-                    # No tool selected = task complete or no match
-                    if turn_history:
-                        final_response = turn_history[-1]
-                    else:
-                        final_response = {"error": "No appropriate tool found"}
-                    break
-
-                tool_name = evaluation["selected_tool"]
-                parameters = evaluation["parameters"]
-
-                # ── Write-ahead checkpoint ──────────────────────────
-                session = self._active_session
-                if session and getattr(session, 'auto_checkpoint', False):
-                    pending_state = {
-                        "user_input": user_input,
-                        "turn": turn + 1,
-                        "completed_turns": list(turn_history),
-                        "pending_tool": tool_name,
-                        "pending_parameters": parameters,
-                        "additional_tools": evaluation.get("additional_tools", []),
-                    }
-                    session.checkpoint(
-                        store=getattr(session, '_checkpoint_store', None),
-                        pending_tool_calls=pending_state,
-                    )
-
-                # Execute the tool call(s)
-                additional_tools = evaluation.get("additional_tools", [])
-                if additional_tools:
-                    async def _safe_call(name, params):
-                        try:
-                            return name, params, await self.call(name, params), None
-                        except Exception as e:
-                            return name, params, None, str(e)
-
-                    tasks = [_safe_call(tool_name, parameters)]
-                    for extra in additional_tools:
-                        tasks.append(_safe_call(extra["tool"], extra.get("parameters", {})))
-
-                    results = await asyncio.gather(*tasks)
-
-                    for t_name, t_params, t_result, t_error in results:
-                        turn_result = {
-                            "turn": turn + 1,
-                            "tool_used": t_name,
-                            "parameters": t_params,
-                            "reasoning": evaluation.get("reasoning", ""),
-                            "result": t_result if t_error is None else f"Error: {t_error}",
-                        }
-                        turn_history.append(turn_result)
+            if not evaluation.get("selected_tool"):
+                # No tool selected = task complete or no match
+                if turn_history:
+                    final_response = turn_history[-1]
                 else:
-                    try:
-                        result = await self.call(tool_name, parameters)
-                    except Exception as e:
-                        result = f"Error: {str(e)}"
+                    final_response = {"error": "No appropriate tool found"}
+                break
 
+            tool_name = evaluation["selected_tool"]
+            parameters = evaluation["parameters"]
+
+            # ── Write-ahead checkpoint ──────────────────────────
+            session = self._active_session
+            if session and getattr(session, 'auto_checkpoint', False):
+                pending_state = {
+                    "user_input": user_input,
+                    "turn": turn + 1,
+                    "completed_turns": list(turn_history),
+                    "pending_tool": tool_name,
+                    "pending_parameters": parameters,
+                    "additional_tools": evaluation.get("additional_tools", []),
+                }
+                session.checkpoint(
+                    store=getattr(session, '_checkpoint_store', None),
+                    pending_tool_calls=pending_state,
+                )
+
+            # Execute the tool call(s)
+            additional_tools = evaluation.get("additional_tools", [])
+            if additional_tools:
+                async def _safe_call(name, params):
+                    try:
+                        return name, params, await self.call(name, params), None
+                    except Exception as e:
+                        return name, params, None, str(e)
+
+                tasks = [_safe_call(tool_name, parameters)]
+                for extra in additional_tools:
+                    tasks.append(_safe_call(extra["tool"], extra.get("parameters", {})))
+
+                results = await asyncio.gather(*tasks)
+
+                for t_name, t_params, t_result, t_error in results:
                     turn_result = {
                         "turn": turn + 1,
-                        "tool_used": tool_name,
-                        "parameters": parameters,
+                        "tool_used": t_name,
+                        "parameters": t_params,
                         "reasoning": evaluation.get("reasoning", ""),
-                        "result": result
+                        "result": t_result if t_error is None else f"Error: {t_error}",
                     }
                     turn_history.append(turn_result)
+            else:
+                try:
+                    result = await self.call(tool_name, parameters)
+                except Exception as e:
+                    result = f"Error: {str(e)}"
 
-                # search_tools is always a continuation signal
-                if tool_name == "search_tools":
-                    continue
+                turn_result = {
+                    "turn": turn + 1,
+                    "tool_used": tool_name,
+                    "parameters": parameters,
+                    "reasoning": evaluation.get("reasoning", ""),
+                    "result": result
+                }
+                turn_history.append(turn_result)
+
+            # search_tools is always a continuation signal
+            if tool_name == "search_tools":
+                continue
 
         if final_response is None:
             final_response = {
