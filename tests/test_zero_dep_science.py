@@ -388,10 +388,12 @@ class TestStdlibHTTPAndZeroDepRuntime:
             server.close()
             await server.wait_closed()
 
-    def test_clean_room_zero_dependencies_subprocess(self):
+    def test_clean_room_zero_dependencies_subprocess(self, tmp_path: Path):
         """Block both `aiohttp` and `pydantic` in sys.modules and run Agent end-to-end."""
         src_dir = str(Path(__file__).resolve().parents[1] / "src")
-        script = """
+        script_file = tmp_path / "clean_room_check.py"
+        script_file.write_text(
+            """
 import sys
 sys.modules["aiohttp"] = None
 sys.modules["pydantic"] = None
@@ -455,9 +457,11 @@ async def main():
 
 asyncio.run(main())
 print("CLEAN_ROOM_OK")
-"""
+""",
+            encoding="utf-8",
+        )
         proc = subprocess.run(
-            [sys.executable, "-c", script],
+            [sys.executable, str(script_file)],
             env={"PYTHONPATH": src_dir},
             capture_output=True,
             text=True,
