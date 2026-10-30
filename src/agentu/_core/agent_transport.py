@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urljoin
 from typing import Any, AsyncIterator, Dict, List, Optional, Type, Union
 
-import aiohttp
+from .http_compat import aiohttp
 
 from .multimodal import build_content_parts, detect_model_capabilities
 from .structured import build_response_format
@@ -138,8 +138,8 @@ class TransportMixin:
             messages = await self._build_messages(prompt, images=images, media=media)
 
             if driver is not None:
-                driver_schema = output_schema
-                if output_schema is not None and not isinstance(output_schema, dict):
+                driver_schema = None
+                if output_schema is not None:
                     driver_schema = build_response_format(output_schema)["json_schema"]["schema"]
 
                 last_error = None

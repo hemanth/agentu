@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Dict, Any, List, Optional, Tuple, Union
-import aiohttp
+from .._core.http_compat import aiohttp
 
 
 @dataclass

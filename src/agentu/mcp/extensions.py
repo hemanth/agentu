@@ -7,7 +7,7 @@ These extensions align agentu with the MCP v2 spec (2026-07-28 RC):
 - Tasks: call-now/fetch-later for long-running operations
 """
 
-import aiohttp
+from .._core.http_compat import aiohttp
 import asyncio
 import json
 import logging

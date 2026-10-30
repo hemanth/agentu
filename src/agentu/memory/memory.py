@@ -67,7 +67,8 @@ class ShortTermMemory:
     def add(self, content: str, memory_type: str = 'conversation',
             metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
             summary: Optional[str] = None, entities: Optional[List[str]] = None,
-            topics: Optional[List[str]] = None, source: Optional[str] = None) -> MemoryEntry:
+            topics: Optional[List[str]] = None, source: Optional[str] = None,
+            timestamp: Optional[float] = None) -> MemoryEntry:
         """Add entry to short-term memory.
 
         Args:
@@ -83,13 +84,14 @@ class ShortTermMemory:
         Returns:
             The created MemoryEntry
         """
+        now_ts = timestamp if timestamp is not None else time.time()
         entry = MemoryEntry(
             content=content,
-            timestamp=time.time(),
+            timestamp=now_ts,
             metadata=metadata or {},
             memory_type=memory_type,
             importance=importance,
-            last_accessed=time.time(),
+            last_accessed=now_ts,
             summary=summary,
             entities=entities or [],
             topics=topics or [],
@@ -160,7 +162,8 @@ class LongTermMemory:
     def add(self, content: str, memory_type: str = 'fact',
             metadata: Optional[Dict[str, Any]] = None, importance: float = 0.5,
             summary: Optional[str] = None, entities: Optional[List[str]] = None,
-            topics: Optional[List[str]] = None, source: Optional[str] = None) -> MemoryEntry:
+            topics: Optional[List[str]] = None, source: Optional[str] = None,
+            timestamp: Optional[float] = None) -> MemoryEntry:
         """Add entry to long-term memory.
 
         Args:
@@ -176,13 +179,14 @@ class LongTermMemory:
         Returns:
             The created MemoryEntry
         """
+        now_ts = timestamp if timestamp is not None else time.time()
         entry = MemoryEntry(
             content=content,
-            timestamp=time.time(),
+            timestamp=now_ts,
             metadata=metadata or {},
             memory_type=memory_type,
             importance=importance,
-            last_accessed=time.time(),
+            last_accessed=now_ts,
             summary=summary,
             entities=entities or [],
             topics=topics or [],
@@ -468,7 +472,7 @@ class Memory:
             lt_entry = self.long_term.add(
                 content=content, memory_type=memory_type, metadata=metadata,
                 importance=importance, summary=summary, entities=entities,
-                topics=topics, source=source
+                topics=topics, source=source, timestamp=entry.timestamp
             )
             # Eagerly index the new entry if an embedding provider is set
             if self.embedding_provider is not None:

@@ -8,13 +8,13 @@ try:
     from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
+    from pydantic import BaseModel
     import uvicorn
 except ImportError as _exc:  # pragma: no cover
     raise ImportError(
         "Serving agents over HTTP/SSE/WebSocket requires the [serve] extra: "
         "pip install 'agentu[serve]'"
     ) from _exc
-from pydantic import BaseModel
 
 from .session import SessionManager
 from .tasks import TaskQueue, TaskStatus

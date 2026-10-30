@@ -1,6 +1,6 @@
 # agentu
 
-Run AI agents in Python with subprocess tool isolation, self-correction, and zero-SDK provider routing.
+Run AI agents in Python with zero dependencies, subprocess tool isolation, AST-compiled contracts, and self-correction.
 
 ```bash
 pip install agentu
@@ -41,7 +41,7 @@ groq   = Agent("fast", model="groq/llama-3.3-70b-versatile")
 local  = Agent("offline", model="ollama/qwen3:latest")
 ```
 
-All four protocol drivers (`GeminiDriver`, `ClaudeDriver`, `OpenAIDriver`, `OllamaDriver`) speak native REST/SSE over pooled `aiohttp` sessions — zero vendor SDK bloat.
+All four protocol drivers (`GeminiDriver`, `ClaudeDriver`, `OpenAIDriver`, `OllamaDriver`) speak native REST/SSE over Python's stdlib (`asyncio` + `ssl`) out of the box and auto-upgrade to pooled `aiohttp` when installed — zero vendor SDK bloat.
 
 ## Sandboxed tool execution
 
@@ -57,7 +57,7 @@ agent = Agent("ops", model="gpt-4o").with_sandbox(
 
 - `read_tools` run as `READONLY`; `write_tools` run as `WRITE`; `DANGEROUS` tools stay blocked unless enabled via `.with_permissions(allow_dangerous=True)`
 - Every sandboxed tool runs in an isolated subprocess — hung tools are killed at `timeout` without crashing your process
-- Defer large tool catalogs with `.with_tools([core_tool], defer=[...100_extra_tools])` so the agent discovers them on demand via `search_tools`
+- Defer large tool catalogs with `.with_tools([core_tool], defer=[...100_extra_tools])` — `search_tools` ranks them via Fielded Okapi BM25F + character 3-gram cosine (`96.7%` Recall@1 / `100%` Recall@3 in `107 µs` across 50 tools vs `53.3%` naive word overlap)
 
 ## Code Mode
 
@@ -73,22 +73,29 @@ Instead of N sequential JSON tool round-trips, the LLM writes typed Python again
 ## Structured outputs + tools
 
 ```python
-from pydantic import BaseModel, Field
 from agentu import Agent, InferResult
 
-class DealSummary(BaseModel):
+class DealSummary:
     top_pick: str
-    price: int = Field(le=1500)
+    price: int
     rationale: str
+
+    def check(self):
+        assert 0 < self.price <= 1500
+        assert len(self.rationale) >= 12
 
 res: InferResult[DealSummary] = await agent.infer(
     "Pick the best laptop deal",
     output_type=DealSummary,
 )
 print(res.data.top_pick, res.data.price)
+
+# Or pass an inline dict shape with zero classes
+quick = await agent.infer("Best budget pick", output_type={"pick": str, "price": int})
+print(quick.data.pick)
 ```
 
-Works standalone or combined with tools — `agentu` executes any needed tools first, validates the final output against your Pydantic model, and retries automatically with field-level error feedback if validation fails.
+Plain classes need zero imports: `agentu` lifts `check()` assertions via `ast` into JSON Schema (`minimum`, `maximum`, `minLength`, `enum`, `pattern`) before the first LLM call, heals malformed/truncated LLM JSON in a single O(n) pushdown pass (`30.5 µs` p50), and reports all violated assertions with live field values on retry. `@dataclass`, `TypedDict`, and Pydantic `BaseModel` work via duck-typing too.
 
 ## Guardrails & hooks
 
@@ -186,6 +193,7 @@ Attach OpenTelemetry GenAI spans via `.with_otel()` (`agentu[otel]`), score data
 
 ## Extras
 
+- `pip install "agentu[http]"` — Progressive `aiohttp` connection-pool acceleration
 - `pip install "agentu[serve]"` — FastAPI HTTP/SSE/WebSocket server & live dashboard
 - `pip install "agentu[media]"` — Automatic video/PDF-to-Markdown degradation
 - `pip install "agentu[search]"` — Built-in `SearchAgent` & DuckDuckGo `search_tool`

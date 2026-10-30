@@ -1,5 +1,5 @@
 """MCP transport module for connecting to remote MCP servers with auth support."""
-import aiohttp
+from .._core.http_compat import aiohttp
 import asyncio
 import json
 import logging

@@ -5,7 +5,7 @@ import logging
 import math
 from typing import List, Optional, Protocol, runtime_checkable
 
-import aiohttp
+from .._core.http_compat import aiohttp
 
 logger = logging.getLogger(__name__)
 

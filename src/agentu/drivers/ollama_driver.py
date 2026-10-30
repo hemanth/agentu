@@ -3,7 +3,7 @@
 import json
 import logging
 from typing import AsyncIterator, Dict, Any, List, Optional
-import aiohttp
+from .._core.http_compat import aiohttp
 
 from .base import BaseDriver, DriverResponse
 

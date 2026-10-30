@@ -4,7 +4,7 @@ import json
 import base64
 import logging
 from typing import AsyncIterator, Dict, Any, List, Optional
-import aiohttp
+from .._core.http_compat import aiohttp
 
 from .base import BaseDriver, DriverResponse, GeneratedImage, ImageGenerationResponse
 

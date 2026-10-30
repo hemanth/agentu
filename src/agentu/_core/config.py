@@ -1,6 +1,8 @@
-"""Declarative agent configuration parser using Pydantic."""
-from typing import List, Optional
-from pydantic import BaseModel, Field
+"""Zero-dependency declarative agent configuration parser."""
+
+from dataclasses import dataclass, field
+import json
+from typing import Any, Dict, List, Optional
 
 try:
     import yaml
@@ -8,41 +10,46 @@ except ImportError:
     yaml = None
 
 
-class CacheConfig(BaseModel):
-    preset: str = Field(default="smart", description="Caching preset (basic, smart, offline, distributed)")
-    ttl: int = Field(default=3600, description="Time to live in seconds")
+@dataclass
+class CacheConfig:
+    preset: str = "smart"
+    ttl: int = 3600
 
 
-class MCPConfig(BaseModel):
-    urls: List[str] = Field(default_factory=list, description="List of MCP server connection URLs")
+@dataclass
+class MCPConfig:
+    urls: List[str] = field(default_factory=list)
 
 
-class AgentConfig(BaseModel):
-    """Pydantic model that defines the schema for declarative agent payloads."""
-    name: str = Field(..., description="Namespace identity of the agent")
-    model: str = Field(default="openai/gpt-4o", description="Model identifier string (e.g. 'openai/gpt-4o')")
-    system_prompt: Optional[str] = Field(default=None, description="System instructions baseline")
-    rules: Optional[str] = Field(default=None, description="Path to rules file (e.g. AGENTS.md)")
-    
-    skills: Optional[List[str]] = Field(default_factory=list, description="Array of GitHub skill URIs")
-    notify: Optional[List[str]] = Field(default_factory=list, description="Array of Apprise webhook URLs")
-    
+@dataclass
+class AgentConfig:
+    """Declarative configuration schema for agentu payloads (JSON or YAML)."""
+
+    name: str
+    model: str = "openai/gpt-4o"
+    system_prompt: Optional[str] = None
+    rules: Optional[str] = None
+    skills: Optional[List[str]] = field(default_factory=list)
+    notify: Optional[List[str]] = field(default_factory=list)
     mcp: Optional[MCPConfig] = None
     cache: Optional[CacheConfig] = None
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("AgentConfig.name must be a non-empty string")
+        if isinstance(self.mcp, dict):
+            self.mcp = MCPConfig(**{k: v for k, v in self.mcp.items() if k in {"urls"}})
+        if isinstance(self.cache, dict):
+            self.cache = CacheConfig(**{k: v for k, v in self.cache.items() if k in {"preset", "ttl"}})
+        if self.cache is not None and not isinstance(self.cache.ttl, int):
+            self.cache.ttl = int(self.cache.ttl)
+
     @classmethod
     def load(cls, path: str) -> "AgentConfig":
-        """Reads a JSON or YAML file into the rigidly-typed AgentConfig structure.
-        
-        Raises:
-            ImportError: if pyyaml is missing and a .yaml file is provided
-            ValidationError: Built-in to pydantic if the schema deviates
-        """
-        import json
-        
+        """Read a JSON or YAML file into a validated AgentConfig instance."""
         with open(path, "r", encoding="utf-8") as f:
             if path.endswith(".json"):
-                data = json.load(f)
+                data: Dict[str, Any] = json.load(f)
             else:
                 if yaml is None:
                     raise ImportError(
@@ -50,5 +57,10 @@ class AgentConfig(BaseModel):
                         "Please run `pip install agentu[yaml]`"
                     )
                 data = yaml.safe_load(f)
-            
-        return cls(**data)
+
+        if not isinstance(data, dict) or "name" not in data:
+            raise ValueError(f"Invalid agent configuration in {path}: missing required 'name' field")
+
+        allowed = {"name", "model", "system_prompt", "rules", "skills", "notify", "mcp", "cache"}
+        filtered = {k: v for k, v in data.items() if k in allowed}
+        return cls(**filtered)

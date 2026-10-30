@@ -1,11 +1,13 @@
 import pytest
-from pydantic import BaseModel
 from agentu._core.result import InferResult
 
 
-class CitySummary(BaseModel):
+class CitySummary:
     name: str
     population: int
+    def __init__(self, name: str = "", population: int = 0):
+        self.name = name
+        self.population = population
 
 
 class TestInferResult:

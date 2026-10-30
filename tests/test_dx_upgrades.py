@@ -3,7 +3,6 @@
 from pathlib import Path
 from unittest.mock import AsyncMock
 import pytest
-from pydantic import BaseModel
 
 import agentu
 from agentu import (
@@ -17,7 +16,7 @@ from agentu import (
 )
 
 
-class WeatherReport(BaseModel):
+class WeatherReport:
     city: str
     temp_f: int
     summary: str
@@ -156,10 +155,7 @@ class TestPackagingAndLazyExports:
             val = getattr(agentu, sym)
             assert val is not None
 
-    def test_core_dependencies_are_minimal(self):
+    def test_core_dependencies_are_zero(self):
         pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
         deps_block = pyproject.split("dependencies = [", 1)[1].split("]", 1)[0]
-        assert "aiohttp" in deps_block
-        assert "pydantic" in deps_block
-        assert "fastapi" not in deps_block
-        assert "ddgs" not in deps_block
+        assert deps_block.strip() == ""

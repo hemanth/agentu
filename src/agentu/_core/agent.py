@@ -1,6 +1,6 @@
 import json
 import asyncio
-import aiohttp
+from .http_compat import aiohttp
 import hashlib
 from typing import AsyncIterator, List, Dict, Any, Optional, Callable, Type, TypeVar, Union, overload
 from dataclasses import dataclass
@@ -11,8 +11,10 @@ from .structured import (
     build_response_format,
     parse_and_validate,
     format_validation_error,
+    heal_json,
     StructuredOutputError,
 )
+from .bm25 import rank_tools_bm25f
 from ..drivers import (
     BaseDriver,
     get_driver_for_model,
@@ -542,18 +544,8 @@ class Agent(TransportMixin, MemoryMixin, SandboxMixin, HooksMixin, ContextMixin,
             except Exception as e:
                 logger.debug("Semantic tool matching failed, using keyword fallback: %s", e)
 
-        # --- Keyword-based fallback -------------------------------------
-        query_terms = query.lower().split()
-        scored = []
-
-        for tool in self.deferred_tools:
-            text = f"{tool.name} {tool.description}".lower()
-            score = sum(1 for term in query_terms if term in text)
-            if score > 0:
-                scored.append((score, tool))
-
-        scored.sort(reverse=True, key=lambda x: x[0])
-        return [tool for _, tool in scored[:limit]]
+        # --- Fielded Okapi BM25F + Character 3-Gram fallback -------------
+        return rank_tools_bm25f(query, self.deferred_tools, limit=limit)
 
     def _semantic_match_tools(self, query: str, limit: int,
                               embedding_provider: Any) -> List[Tool]:
@@ -1770,7 +1762,10 @@ Ensure parameter types (numbers, booleans, arrays) and names match the tool defi
                         "selected_tool": None,
                         "parameters": {},
                     }
-            return json.loads(cleaned)
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                return json.loads(heal_json(cleaned))
         except (json.JSONDecodeError, Exception) as e:
             stripped = raw_response.strip()
             if stripped and not stripped.startswith(("{", "[")):

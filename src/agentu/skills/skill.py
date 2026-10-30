@@ -8,7 +8,7 @@ Skills provide domain-specific expertise through a 3-level loading system:
 """
 
 import asyncio
-import aiohttp
+from .._core.http_compat import aiohttp
 import json
 import logging
 import re

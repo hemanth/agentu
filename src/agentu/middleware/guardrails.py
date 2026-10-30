@@ -162,10 +162,14 @@ class JSONSchema(Guardrail):
                 reason=f"Invalid JSON: {str(e)}",
             )
 
-        # Validate against Pydantic model
+        # Validate against plain Python class, dataclass, inline dict, or Pydantic model
         if self.model is not None:
             try:
-                self.model.model_validate(data)
+                if hasattr(self.model, "model_validate"):
+                    self.model.model_validate(data)
+                else:
+                    from .._core.structured import _coerce_and_validate
+                    _coerce_and_validate(data, self.model)
                 return GuardrailResult(passed=True, guardrail=self.name)
             except Exception as e:
                 return GuardrailResult(

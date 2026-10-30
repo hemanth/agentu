@@ -5,6 +5,24 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] - 2026-10-29
+
+### Added
+
+- **Zero-Import Plain-Class Schemas & AST Contract Lifting**: `output_type` and `output_schema` now accept plain Python classes (`class Deal: pick: str; price: float`) with zero imports, inline dict shapes (`{"pick": str, "price": float}` hydrated into dot-and-dict `StructRecord`), `@dataclass`, and `TypedDict` alongside progressive Pydantic `BaseModel` duck-typing. Python `def check(self): assert ...` methods are statically parsed via `ast` to lift `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `enum`, and `pattern` directly into JSON Schema before the first LLM call, and report all violated assertions with live field values in a single self-correction turn.
+- **Deterministic Pushdown Automaton JSON Healer (`heal_json`)**: Single-pass $O(n)$ stack repair automaton recovers markdown-fenced, prose-wrapped, commented (`//`, `/* */`), single-quoted, unquoted-key, Python-literal (`True`/`False`/`None`), trailing-comma, and `max_tokens`-truncated JSON locally (`100%` recovery across 24 defect classes in `30.5 µs` p50) before burning retry tokens, paired with `camelCase` ↔ `snake_case` alignment and Damerau-Levenshtein ($d \le 2$) typo diagnostics.
+- **Fuzzy Fielded Okapi BM25F + Character 3-Gram Tool Discovery**: Upgraded `Agent._find_matching_tools` (`search_tools`) from raw substring word counting to `rank_tools_bm25f` ($k_1=1.5, b=0.75$) across `(name, parameters, description)` with camelCase/snake_case sub-tokenization, suffix stemming, and OOV-gated character 3-gram cosine (`96.7%` Recall@1 / `100%` Recall@3 / `0.983` MRR in `106.9 µs` on a 50-tool enterprise catalog vs `53.3%` naive word overlap).
+- **Pure-Stdlib Async HTTP/1.1 + TLS + Chunked SSE Transport**: Added `StdlibClientSession` (`asyncio.open_connection` + `ssl`) with automatic progressive upgrade to `aiohttp` when installed (`pip install "agentu[http]"`).
+- **Reproducible Empirical Benchmarks**: Added `bench/run_benchmarks.py` measuring malformed JSON recovery, 50-tool BM25F ranking accuracy/latency, and clean-room cold-start import footprint.
+
+### Changed
+
+- **True Zero Required Dependencies (`dependencies = []`)**: Removed `aiohttp` and `pydantic` from required core dependencies in `pyproject.toml` (`2.01x` faster cold-start import in clean environments); moved to optional `agentu[http]` and `agentu[pydantic]` extras and migrated `AgentConfig` and `JSONSchema` guardrails to pure stdlib.
+
+### Fixed
+
+- Fixed microsecond timestamp drift between `ShortTermMemory` and `LongTermMemory` during `Memory.remember()` when `importance >= 0.7`, ensuring `Memory.recall()` deduplicates dual-written entries deterministically.
+
 ## [2.10.1] - 2026-10-29
 
 ### Removed

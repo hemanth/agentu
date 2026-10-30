@@ -11,10 +11,13 @@ from ._core.hooks import HookAction, HookResult, HookSet, PermissionApprovalRequ
 if TYPE_CHECKING:
     from ._core.agent import Agent
     from ._core.structured import (
+        schema_for_type,
         pydantic_to_json_schema,
         build_response_format,
         parse_and_validate,
         format_validation_error,
+        heal_json,
+        StructRecord,
         StructuredOutputError,
     )
     from .drivers import (
@@ -88,10 +91,13 @@ if TYPE_CHECKING:
 _LAZY_IMPORTS = {
     # Core Agent, Structured & Drivers
     "Agent": ("._core.agent", "Agent"),
+    "schema_for_type": ("._core.structured", "schema_for_type"),
     "pydantic_to_json_schema": ("._core.structured", "pydantic_to_json_schema"),
     "build_response_format": ("._core.structured", "build_response_format"),
     "parse_and_validate": ("._core.structured", "parse_and_validate"),
     "format_validation_error": ("._core.structured", "format_validation_error"),
+    "heal_json": ("._core.structured", "heal_json"),
+    "StructRecord": ("._core.structured", "StructRecord"),
     "StructuredOutputError": ("._core.structured", "StructuredOutputError"),
     "BaseDriver": (".drivers", "BaseDriver"),
     "DriverResponse": (".drivers", "DriverResponse"),
@@ -288,9 +294,9 @@ __all__ = [
     "Middleware", "BaseMiddleware", "MiddlewareChain", "CallContext",
     "CostTracker", "LoggerMiddleware", "RetryMiddleware", "NotifyMiddleware",
     # Structured Output & Typed Generics
-    "InferResult",
-    "pydantic_to_json_schema", "build_response_format",
-    "parse_and_validate", "format_validation_error", "StructuredOutputError",
+    "InferResult", "StructRecord",
+    "schema_for_type", "pydantic_to_json_schema", "build_response_format",
+    "parse_and_validate", "format_validation_error", "heal_json", "StructuredOutputError",
     # Multi-modal
     "build_content_parts", "resolve_image", "resolve_media",
     "detect_mime_type", "detect_media_kind",
