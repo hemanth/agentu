@@ -469,3 +469,14 @@ print("CLEAN_ROOM_OK")
         )
         assert proc.returncode == 0, f"STDERR:\n{proc.stderr}\nSTDOUT:\n{proc.stdout}"
         assert "CLEAN_ROOM_OK" in proc.stdout
+
+        # Also verify `python -c` inline execution (`co_filename == "<string>"`) lifts AST on Python 3.10-3.14
+        inline_proc = subprocess.run(
+            [sys.executable, "-c", script_file.read_text(encoding="utf-8")],
+            env={"PYTHONPATH": src_dir},
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert inline_proc.returncode == 0, f"STDERR:\n{inline_proc.stderr}\nSTDOUT:\n{inline_proc.stdout}"
+        assert "CLEAN_ROOM_OK" in inline_proc.stdout

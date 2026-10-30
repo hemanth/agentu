@@ -680,13 +680,42 @@ def _get_contract_methods(cls: Type, include_post_init: bool = True) -> List[Any
     return methods
 
 
+def _parse_contract_ast(fn: Any) -> Optional[ast.Module]:
+    """Parse the AST of a contract method from disk, linecache, or `python -c` (`sys.orig_argv`)."""
+    try:
+        src = textwrap.dedent(inspect.getsource(fn))
+        return ast.parse(src)
+    except (OSError, TypeError, IndentationError, SyntaxError):
+        pass
+
+    # Fallback for Python < 3.13 `python -c "..."` where `<string>` is not in `linecache`
+    code_obj = getattr(fn, "__code__", None)
+    if code_obj is not None and getattr(code_obj, "co_filename", "") == "<string>":
+        orig_argv = getattr(sys, "orig_argv", None) or ()
+        if "-c" in orig_argv:
+            c_idx = orig_argv.index("-c")
+            if c_idx + 1 < len(orig_argv):
+                try:
+                    full_tree = ast.parse(orig_argv[c_idx + 1])
+                    target_lineno = code_obj.co_firstlineno
+                    target_name = getattr(fn, "__name__", "")
+                    for node in ast.walk(full_tree):
+                        if (
+                            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and node.name == target_name
+                            and node.lineno == target_lineno
+                        ):
+                            return ast.Module(body=[node], type_ignores=[])
+                except SyntaxError:
+                    pass
+    return None
+
+
 def _lift_ast_constraints(cls: Type, properties: Dict[str, Dict[str, Any]]) -> None:
     """Statically inspect `check`/`validate`/`__post_init__` via `ast` and enrich JSON Schema."""
     for fn in _get_contract_methods(cls, include_post_init=True):
-        try:
-            src = textwrap.dedent(inspect.getsource(fn))
-            tree = ast.parse(src)
-        except (OSError, TypeError, IndentationError, SyntaxError):
+        tree = _parse_contract_ast(fn)
+        if tree is None:
             continue
 
         for stmt in ast.walk(tree):
@@ -773,10 +802,8 @@ def _referenced_self_fields(node: ast.AST) -> List[str]:
 def _diagnose_failed_contract_fn(fn: Any, instance: Any, fallback_exc: Exception, prefix: Tuple[Any, ...]) -> List[Dict[str, Any]]:
     """Evaluate all `assert` clauses in `fn` so every violated invariant is reported at once."""
     collected: List[Dict[str, Any]] = []
-    try:
-        src = textwrap.dedent(inspect.getsource(fn))
-        tree = ast.parse(src)
-    except (OSError, TypeError, IndentationError, SyntaxError):
+    tree = _parse_contract_ast(fn)
+    if tree is None:
         msg = str(fallback_exc) or f"{type(fallback_exc).__name__} in {getattr(fn, '__name__', 'check')}()"
         return [{"loc": prefix or ("__root__",), "msg": msg}]
 

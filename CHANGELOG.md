@@ -5,6 +5,12 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.1] - 2026-10-29
+
+### Fixed
+
+- Fixed static AST contract lifting (`_parse_contract_ast`) inside `python -c "..."` inline invocations on Python 3.10–3.12 (where `<string>` is not populated in `linecache`) by resolving the inline script AST via `sys.orig_argv`.
+
 ## [2.11.0] - 2026-10-29
 
 ### Added
