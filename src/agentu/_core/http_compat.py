@@ -498,6 +498,237 @@ class _StdlibAiohttpModule:
 
 stdlib_aiohttp = _StdlibAiohttpModule()
 
+
+class FetchStreamContent:
+    """Async line/byte stream over a Pyodide / Cloudflare Workers Fetch response."""
+
+    def __init__(self, body_bytes: bytes):
+        self._body = body_bytes
+
+    async def read_all(self) -> bytes:
+        return self._body
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        return self._iter_lines()
+
+    async def _iter_lines(self) -> AsyncIterator[bytes]:
+        if not self._body:
+            return
+        for line in self._body.splitlines(keepends=True):
+            yield line
+
+
+class FetchClientResponse:
+    """Async context-managed HTTP response backed by ``pyodide.http.pyfetch`` / Web Fetch."""
+
+    def __init__(
+        self,
+        url: str,
+        status: int,
+        reason: str,
+        headers: CaseInsensitiveHeaders,
+        body_bytes: bytes,
+    ):
+        self.url = url
+        self.status = status
+        self.reason = reason
+        self.headers = headers
+        self.content = FetchStreamContent(body_bytes)
+        self._body_cache = body_bytes
+
+    def raise_for_status(self) -> None:
+        if self.status >= 400:
+            raise StdlibClientResponseError(
+                self.url,
+                status=self.status,
+                message=self.reason or f"HTTP {self.status}",
+                headers=self.headers,
+            )
+
+    async def read(self) -> bytes:
+        return self._body_cache
+
+    async def text(self, encoding: str = "utf-8") -> str:
+        return self._body_cache.decode(encoding, errors="replace")
+
+    async def json(self) -> Any:
+        return _json.loads(await self.text())
+
+    async def release(self) -> None:
+        return None
+
+    async def __aenter__(self) -> "FetchClientResponse":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        await self.release()
+
+
+class FetchClientSession:
+    """Cloudflare Python Workers / Pyodide async HTTP session using Web Fetch API.
+
+    Compatible with ``aiohttp.ClientSession`` so all ``agentu`` LLM drivers
+    (Gemini, Claude, OpenAI, Groq, DeepSeek) and HTTP MCP clients run natively
+    on Cloudflare Python Workers with zero external dependencies.
+    """
+
+    def __init__(
+        self,
+        *,
+        timeout: Optional[StdlibClientTimeout] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        fetcher: Optional[Any] = None,
+        **_: Any,
+    ):
+        self._default_timeout = timeout
+        self._default_headers = dict(headers) if headers else {}
+        self._fetcher = fetcher
+        self.closed = False
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any = None,
+        data: Any = None,
+        headers: Optional[Mapping[str, str]] = None,
+        timeout: Optional[Any] = None,
+        max_redirects: int = 5,
+    ) -> _RequestContextManager:
+        return _RequestContextManager(
+            self._send(
+                method=method.upper(),
+                url=url,
+                json_body=json,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+            )
+        )
+
+    def get(self, url: str, **kwargs: Any) -> _RequestContextManager:
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> _RequestContextManager:
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url: str, **kwargs: Any) -> _RequestContextManager:
+        return self.request("PUT", url, **kwargs)
+
+    def delete(self, url: str, **kwargs: Any) -> _RequestContextManager:
+        return self.request("DELETE", url, **kwargs)
+
+    async def _send(
+        self,
+        *,
+        method: str,
+        url: str,
+        json_body: Any,
+        data: Any,
+        headers: Optional[Mapping[str, str]],
+        timeout: Optional[Any],
+    ) -> FetchClientResponse:
+        if self.closed:
+            raise StdlibClientError("Session is closed")
+
+        fetcher = self._fetcher
+        if fetcher is None:
+            try:
+                from pyodide.http import pyfetch  # type: ignore
+
+                fetcher = pyfetch
+            except ImportError as exc:
+                raise StdlibClientError("pyodide.http.pyfetch is not available in this runtime") from exc
+
+        merged_headers = CaseInsensitiveHeaders(self._default_headers)
+        if headers:
+            for k, v in headers.items():
+                merged_headers[k] = v
+
+        body: Optional[Any] = None
+        if json_body is not None:
+            body = _json.dumps(json_body)
+            if "Content-Type" not in merged_headers:
+                merged_headers["Content-Type"] = "application/json"
+        elif data is not None:
+            body = data if isinstance(data, (bytes, str)) else str(data)
+
+        kwargs: Dict[str, Any] = {
+            "method": method,
+            "headers": dict(merged_headers),
+        }
+        if body is not None and method not in ("GET", "HEAD"):
+            kwargs["body"] = body
+
+        try:
+            resp = await fetcher(url, **kwargs)
+            status = int(getattr(resp, "status", 200))
+            reason = str(getattr(resp, "status_text", "") or "")
+            raw_headers = getattr(resp, "headers", None) or {}
+            resp_headers = CaseInsensitiveHeaders(
+                dict(raw_headers.items()) if hasattr(raw_headers, "items") else {}
+            )
+            if hasattr(resp, "bytes"):
+                body_bytes = await resp.bytes()
+                if not isinstance(body_bytes, (bytes, bytearray)):
+                    body_bytes = bytes(body_bytes)
+            elif hasattr(resp, "string"):
+                body_bytes = (await resp.string()).encode("utf-8")
+            elif hasattr(resp, "text"):
+                body_bytes = (await resp.text()).encode("utf-8")
+            else:
+                body_bytes = b""
+            return FetchClientResponse(
+                url=str(getattr(resp, "url", url) or url),
+                status=status,
+                reason=reason,
+                headers=resp_headers,
+                body_bytes=bytes(body_bytes),
+            )
+        except StdlibClientError:
+            raise
+        except Exception as exc:
+            raise StdlibClientError(f"Fetch failed for {url}: {exc}") from exc
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def __aenter__(self) -> "FetchClientSession":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        await self.close()
+
+
+class _FetchAiohttpModule:
+    """Namespace shim mirroring ``aiohttp`` on Cloudflare Python Workers / Pyodide."""
+
+    ClientSession = FetchClientSession
+    ClientResponse = FetchClientResponse
+    ClientTimeout = StdlibClientTimeout
+    ClientError = StdlibClientError
+    ClientResponseError = StdlibClientResponseError
+
+
+fetch_aiohttp = _FetchAiohttpModule()
+
+
+def _is_pyodide_runtime() -> bool:
+    import sys as _sys
+
+    if _sys.platform == "emscripten":
+        return True
+    try:
+        import pyodide.http  # type: ignore  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+HAS_PYODIDE_FETCH = _is_pyodide_runtime()
+
 try:
     import aiohttp as _native_aiohttp  # type: ignore
     if _native_aiohttp is None:  # e.g. sys.modules['aiohttp'] = None in zero-dep tests
@@ -505,5 +736,5 @@ try:
     aiohttp: Any = _native_aiohttp
     HAS_NATIVE_AIOHTTP = True
 except ImportError:
-    aiohttp = stdlib_aiohttp
+    aiohttp = fetch_aiohttp if HAS_PYODIDE_FETCH else stdlib_aiohttp
     HAS_NATIVE_AIOHTTP = False

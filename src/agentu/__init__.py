@@ -52,8 +52,9 @@ if TYPE_CHECKING:
     from .mcp.transport import MCPServerConfig, AuthConfig, TransportType
     from .mcp.tool import MCPToolAdapter, MCPToolManager
     from .memory.memory import Memory, MemoryEntry, ShortTermMemory, LongTermMemory
-    from .memory.storage import MemoryStorage, JSONStorage, SQLiteStorage, create_storage
+    from .memory.storage import MemoryStorage, JSONStorage, SQLiteStorage, InMemoryStorage, create_storage
     from .runtime.serve import serve, AgentServer, create_server
+    from .runtime.cloudflare import CloudflareAgentApp, EdgeRequest, EdgeResponse
     from .runtime.session import Session, SessionManager
     from .runtime.sandbox import SubprocessSandbox, SandboxLimits, SandboxResult, SandboxBackend
     from .runtime.durable import AgentLock
@@ -158,6 +159,10 @@ _LAZY_IMPORTS = {
     "SandboxResult": (".runtime.sandbox", "SandboxResult"),
     "SandboxBackend": (".runtime.sandbox", "SandboxBackend"),
     "AgentLock": (".runtime.durable", "AgentLock"),
+    "CloudflareAgentApp": (".runtime.cloudflare", "CloudflareAgentApp"),
+    "EdgeRequest": (".runtime.cloudflare", "EdgeRequest"),
+    "EdgeResponse": (".runtime.cloudflare", "EdgeResponse"),
+    "InMemoryStorage": (".memory.storage", "InMemoryStorage"),
     # Eval
     "evaluate": (".eval.eval", "evaluate"),
     "EvalResult": (".eval.eval", "EvalResult"),

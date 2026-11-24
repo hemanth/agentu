@@ -41,7 +41,22 @@ groq   = Agent("fast", model="groq/llama-3.3-70b-versatile")
 local  = Agent("offline", model="ollama/qwen3:latest")
 ```
 
-All four protocol drivers (`GeminiDriver`, `ClaudeDriver`, `OpenAIDriver`, `OllamaDriver`) speak native REST/SSE over Python's stdlib (`asyncio` + `ssl`) out of the box and auto-upgrade to pooled `aiohttp` when installed — zero vendor SDK bloat.
+All four protocol drivers (`GeminiDriver`, `ClaudeDriver`, `OpenAIDriver`, `OllamaDriver`) speak native REST/SSE over Python's stdlib (`asyncio` + `ssl`) out of the box, auto-upgrade to pooled `aiohttp` when installed, and auto-switch to `pyodide.http.pyfetch` inside **Cloudflare Python Workers** — zero vendor SDK bloat.
+
+## Always-on Cloudflare Python Workers ($0/month)
+
+```python
+from agentu import Agent, CloudflareAgentApp
+
+agent = Agent("ops", model="gemini-2.5-flash").with_tools([search_products])
+app = CloudflareAgentApp(agent, private=True)  # reads AGENT_PASSCODE from Worker Secrets
+
+# Inside your Cloudflare Python Worker entry point:
+async def on_fetch(request, env):
+    return await app.handle_fetch(request, env)
+```
+
+Provides passcode-gated `/api/chat`, `/api/memory` (KV-backed), `/api/tools`, `/api/webhook/whatsapp`, and `app.handle_scheduled(controller, env)` for Cron Triggers — with `X-Robots-Tag: noindex` for private agents.
 
 ## Sandboxed tool execution
 

@@ -5,6 +5,14 @@ All notable changes to agentu will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-11-24
+
+### Added
+
+- **Cloudflare Python Workers (Pyodide) Native Transport (`FetchClientSession`)**: Added `FetchClientSession` / `FetchClientResponse` / `FetchStreamContent` in `agentu._core.http_compat`, automatically activating `pyodide.http.pyfetch` when running inside Cloudflare Python Workers (`sys.platform == "emscripten"`). All 4 `agentu` LLM drivers (`Gemini`, `Claude`, `OpenAI`, `Groq/DeepSeek`) and HTTP tools now run on Cloudflare's $0/month edge tier with zero external dependencies.
+- **Zero-Cost Always-On Edge Runtime (`CloudflareAgentApp`)**: Added `agentu.CloudflareAgentApp`, `EdgeRequest`, and `EdgeResponse` (`agentu.runtime.cloudflare`) providing HMAC-SHA256 passcode gating (`HttpOnly; Secure; SameSite=Strict` cookies), `X-Robots-Tag: noindex` privacy headers, `/api/chat`, `/api/tools`, `/api/memory`, Meta WhatsApp Cloud API webhook handling (`/api/webhook/whatsapp`), and Cron Trigger support (`handle_scheduled`).
+- **Zero-Filesystem Edge Memory (`InMemoryStorage`)**: Added `InMemoryStorage` in `agentu.memory.storage` with `export_json()` / `import_json()` for hydrating and persisting memory via Cloudflare KV or Durable Objects without local disk access.
+
 ## [2.11.1] - 2026-10-29
 
 ### Fixed

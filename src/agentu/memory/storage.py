@@ -365,6 +365,38 @@ class SQLiteStorage(MemoryStorage):
             logger.debug(f"Closed SQLite connection to {self.db_path}")
 
 
+class InMemoryStorage(MemoryStorage):
+    """Zero-filesystem in-memory storage backend for Cloudflare Workers / edge isolates.
+
+    Supports JSON snapshot export/import so edge handlers can hydrate from and
+    persist to Cloudflare KV or Durable Objects without local disk access.
+    """
+
+    def __init__(self, initial_entries: Optional[List[Dict[str, Any]]] = None):
+        self._entries: List[Dict[str, Any]] = list(initial_entries or [])
+
+    def save(self, entries: List[Any]) -> None:
+        self._entries = [
+            e.to_dict() if hasattr(e, "to_dict") else dict(e) for e in entries
+        ]
+
+    def load(self) -> List[Dict[str, Any]]:
+        return [dict(e) for e in self._entries]
+
+    def export_json(self) -> str:
+        return json.dumps(self._entries)
+
+    def import_json(self, raw: str) -> None:
+        if not raw:
+            self._entries = []
+            return
+        parsed = json.loads(raw)
+        self._entries = list(parsed) if isinstance(parsed, list) else []
+
+    def close(self) -> None:
+        pass
+
+
 def create_storage(storage_path: str, use_sqlite: bool = True) -> MemoryStorage:
     """Factory function to create appropriate storage backend.
 
